@@ -45,7 +45,10 @@
 - `docs/coding-standard.md`
 - `docs/review-rules.md`
 - `docs/commit-message.md`
+- `docs/architecture.md`
+- `docs/testing-strategy.md`
 - `CONTRIBUTING.md`
+- `.github/pull_request_template.md`
 
 ## 로드맵
 

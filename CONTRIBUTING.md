@@ -26,6 +26,9 @@
 - `docs/coding-standard.md`
 - `docs/review-rules.md`
 - `docs/commit-message.md`
+- `docs/architecture.md`
+- `docs/testing-strategy.md`
+- `.github/pull_request_template.md`
 
 ## 코드 작성 시 기대 사항
 
