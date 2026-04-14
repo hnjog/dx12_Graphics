@@ -39,3 +39,7 @@
 
 # debug information files
 *.dwo
+
+# Visual Studio local workspace files
+.vs/
+*.vcxproj.user
