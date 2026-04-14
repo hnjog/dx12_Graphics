@@ -44,6 +44,7 @@
 
 - `docs/coding-standard.md`
 - `docs/review-rules.md`
+- `docs/commit-message.md`
 - `CONTRIBUTING.md`
 
 ## 로드맵
