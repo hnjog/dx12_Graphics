@@ -29,6 +29,9 @@
 - `docs/architecture.md`
 - `docs/testing-strategy.md`
 - `.github/pull_request_template.md`
+- `.editorconfig`
+- `.clang-format`
+- `.clang-tidy`
 
 ## 코드 작성 시 기대 사항
 
