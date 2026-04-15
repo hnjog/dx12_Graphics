@@ -43,3 +43,16 @@
 # Visual Studio local workspace files
 .vs/
 *.vcxproj.user
+
+# Visual Studio build output
+[Dd]ebug/
+[Rr]elease/
+[Xx]64/
+[Xx]86/
+*.tlog
+*.recipe
+*.idb
+*.ipdb
+*.iobj
+*.lastbuildstate
+*.log
