@@ -13,5 +13,92 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="소스 파일\App">
+      <UniqueIdentifier>{D205F0F6-892B-4E5C-82F4-10D0012140D9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="소스 파일\DX12">
+      <UniqueIdentifier>{6D516B14-C425-41E4-B9DE-5DF58FB7128A}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="소스 파일\Platform\Win32">
+      <UniqueIdentifier>{1C32CE29-05F0-4A7F-9A92-411917B2FD69}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="소스 파일\Renderer">
+      <UniqueIdentifier>{8EF0B8A9-3D5E-4F42-8AF7-8C9AAB650E89}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="헤더 파일\App">
+      <UniqueIdentifier>{F161F543-62B8-48B3-81E6-32A0D1EBF36C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="헤더 파일\Core">
+      <UniqueIdentifier>{7F44960E-D034-43E7-9AB9-5C6C01DE37B7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="헤더 파일\DX12">
+      <UniqueIdentifier>{BCE72D5B-C599-4DFB-8F3C-572DB69FDCC5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="헤더 파일\Platform\Win32">
+      <UniqueIdentifier>{721B85AD-E389-4777-93D4-E6BD4204FE3A}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="헤더 파일\Renderer">
+      <UniqueIdentifier>{2CD3C605-B53F-4E68-84B5-9DD71FEAF5E5}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Source\App\EngineApp.cpp">
+      <Filter>소스 파일\App</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\App\Main.cpp">
+      <Filter>소스 파일\App</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\DX12\DX12Device.cpp">
+      <Filter>소스 파일\DX12</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\DX12\DX12SwapChain.cpp">
+      <Filter>소스 파일\DX12</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Platform\Win32\Window.cpp">
+      <Filter>소스 파일\Platform\Win32</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Renderer\Renderer.cpp">
+      <Filter>소스 파일\Renderer</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Source\App\EngineApp.h">
+      <Filter>헤더 파일\App</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Core\NonCopyable.h">
+      <Filter>헤더 파일\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Core\Types.h">
+      <Filter>헤더 파일\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\DX12\DX12Common.h">
+      <Filter>헤더 파일\DX12</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\DX12\DX12Device.h">
+      <Filter>헤더 파일\DX12</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\DX12\DX12SwapChain.h">
+      <Filter>헤더 파일\DX12</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Platform\Win32\Win32Common.h">
+      <Filter>헤더 파일\Platform\Win32</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Platform\Win32\Window.h">
+      <Filter>헤더 파일\Platform\Win32</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Renderer\Renderer.h">
+      <Filter>헤더 파일\Renderer</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Assets\.gitkeep">
+      <Filter>리소스 파일</Filter>
+    </None>
+    <None Include="Shaders\.gitkeep">
+      <Filter>리소스 파일</Filter>
+    </None>
+    <None Include="Tests\.gitkeep">
+      <Filter>리소스 파일</Filter>
+    </None>
   </ItemGroup>
 </Project>
