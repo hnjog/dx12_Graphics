@@ -12,6 +12,18 @@
 - 테스트와 샘플 코드를 통해 기능 검증이 가능한 구조를 지향합니다.
 - AI 리뷰와 사람 리뷰가 모두 이해하기 쉬운 명확한 계층을 유지합니다.
 
+## 구조 다이어그램
+
+```mermaid
+flowchart TD
+    A["Sample Or Test App"] --> B["Renderer"]
+    B --> C["DX12 Backend"]
+    B --> D["Core"]
+    A --> E["Platform"]
+    E --> D
+    C --> D
+```
+
 ## 권장 레이어
 
 프로젝트는 아래와 같은 계층 구조를 기본 방향으로 삼습니다.
