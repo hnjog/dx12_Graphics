@@ -92,6 +92,16 @@ permissions:
 
 이 수정의 목적은 `actions/github-script`가 PR 코멘트를 생성하거나 갱신할 수 있게 하는 것입니다.
 
+### OpenAI 429 재시도 및 로그 개선
+
+`invoke_ai_review.ps1`에 아래 동작을 추가했습니다.
+
+- OpenAI Responses API 호출 시 `429`를 만나면 짧은 backoff 후 최대 3회 재시도
+- 재시도 중 각 attempt를 Actions 로그에 출력
+- 최종 실패 시 응답 코드뿐 아니라 가능한 경우 OpenAI 에러 body의 `type`, `code`, `message`까지 요약
+
+이 수정의 목적은 단순히 `Too Many Requests`만 보이는 상태에서 벗어나, 실제 원인이 rate limit인지 quota/billing인지 더 빠르게 판단할 수 있게 하는 것입니다.
+
 ## 추가로 사람이 확인해야 하는 설정
 
 코드 수정만으로 끝나지 않을 수 있으므로 저장소 설정도 함께 확인합니다.
@@ -127,7 +137,5 @@ OpenAI Platform에서 아래를 확인합니다.
 
 ## 후속 작업 제안
 
-- OpenAI `429` 응답 시 짧은 backoff 후 재시도 로직 추가
-- OpenAI 에러 바디를 더 잘 드러내는 로그 개선
 - PR 코멘트 실패와 AI 호출 실패를 summary에서 더 명확히 분리
 - Notion 운영 문서에 "문제 발생 시 확인 경로" 섹션 추가

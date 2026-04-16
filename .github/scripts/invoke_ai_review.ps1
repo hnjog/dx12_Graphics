@@ -36,6 +36,144 @@ function Get-ResponseText {
     return ($texts -join "`n")
 }
 
+function Get-HttpStatusCode {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Exception]$Exception
+    )
+
+    if ($null -ne $Exception.PSObject.Properties['Response'] -and $null -ne $Exception.Response) {
+        $statusCode = $Exception.Response.StatusCode
+        if ($statusCode -is [int]) {
+            return [int]$statusCode
+        }
+
+        if ($null -ne $statusCode) {
+            return [int]$statusCode.value__
+        }
+    }
+
+    return $null
+}
+
+function Get-HttpResponseBody {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Exception]$Exception
+    )
+
+    if ($null -ne $Exception.ErrorDetails -and -not [string]::IsNullOrWhiteSpace([string]$Exception.ErrorDetails.Message)) {
+        return [string]$Exception.ErrorDetails.Message
+    }
+
+    if ($null -ne $Exception.PSObject.Properties['Response'] -and $null -ne $Exception.Response -and $null -ne $Exception.Response.Content) {
+        try {
+            return $Exception.Response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        }
+        catch {
+            return ''
+        }
+    }
+
+    return ''
+}
+
+function Get-OpenAIErrorDetail {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Exception]$Exception
+    )
+
+    $statusCode = Get-HttpStatusCode -Exception $Exception
+    $body = Get-HttpResponseBody -Exception $Exception
+
+    if ([string]::IsNullOrWhiteSpace($body)) {
+        if ($null -ne $statusCode) {
+            return "HTTP $statusCode. $($Exception.Message)"
+        }
+
+        return $Exception.Message
+    }
+
+    try {
+        $parsed = $body | ConvertFrom-Json
+        if ($null -ne $parsed.error) {
+            $message = [string]$parsed.error.message
+            $type = [string]$parsed.error.type
+            $code = [string]$parsed.error.code
+            $parts = New-Object System.Collections.Generic.List[string]
+
+            if ($null -ne $statusCode) {
+                $parts.Add("HTTP $statusCode")
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($type)) {
+                $parts.Add("type=$type")
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($code)) {
+                $parts.Add("code=$code")
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($message)) {
+                $parts.Add("message=$message")
+            }
+
+            return ($parts -join ', ')
+        }
+    }
+    catch {
+        # Fall back to the raw body below.
+    }
+
+    if ($null -ne $statusCode) {
+        return "HTTP $statusCode. Response body: $body"
+    }
+
+    return "Response body: $body"
+}
+
+function Invoke-OpenAIResponsesRequest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Headers,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Body,
+        [int]$MaxAttempts = 3
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            Write-Host "OpenAI Responses API request attempt $attempt/$MaxAttempts"
+
+            return Invoke-RestMethod `
+                -Method Post `
+                -Uri 'https://api.openai.com/v1/responses' `
+                -Headers $Headers `
+                -Body ($Body | ConvertTo-Json -Depth 100)
+        }
+        catch {
+            $statusCode = Get-HttpStatusCode -Exception $_.Exception
+            $detail = Get-OpenAIErrorDetail -Exception $_.Exception
+
+            if ($statusCode -eq 429 -and $attempt -lt $MaxAttempts) {
+                $delaySeconds = [Math]::Min(20, [int][Math]::Pow(2, $attempt))
+                Write-Warning "OpenAI request hit HTTP 429 on attempt $attempt/$MaxAttempts. Retrying in $delaySeconds seconds. Detail: $detail"
+                Start-Sleep -Seconds $delaySeconds
+                continue
+            }
+
+            if ($statusCode -eq 429) {
+                throw "OpenAI Responses API failed after $MaxAttempts attempts. $detail"
+            }
+
+            throw "OpenAI Responses API request failed. $detail"
+        }
+    }
+
+    throw "OpenAI Responses API request failed without returning a response."
+}
+
 function New-ReviewObject {
     param(
         [string]$Summary,
@@ -320,11 +458,7 @@ $diffText
         'Content-Type' = 'application/json'
     }
 
-    $response = Invoke-RestMethod `
-        -Method Post `
-        -Uri 'https://api.openai.com/v1/responses' `
-        -Headers $headers `
-        -Body ($body | ConvertTo-Json -Depth 100)
+    $response = Invoke-OpenAIResponsesRequest -Headers $headers -Body $body
 
     $rawText = Get-ResponseText -Response $response
     if ([string]::IsNullOrWhiteSpace($rawText)) {
