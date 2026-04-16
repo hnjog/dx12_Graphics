@@ -102,6 +102,7 @@ permissions:
 - 재시도 중 각 attempt를 Actions 로그에 출력
 - 최종 실패 원인을 Actions 콘솔 로그에 직접 출력
 - 최종 실패 시 응답 코드뿐 아니라 가능한 경우 OpenAI 에러 body의 `type`, `code`, `message`까지 요약
+- 예외 객체에 `ErrorDetails` 속성이 없는 경우에도 fallback 메시지로 안전하게 처리
 
 이 수정의 목적은 단순히 `Too Many Requests`만 보이는 상태에서 벗어나, 실제 원인이 rate limit인지 quota/billing인지, 혹은 timeout 계열 문제인지 더 빠르게 판단할 수 있게 하는 것입니다.
 

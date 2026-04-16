@@ -62,7 +62,11 @@ function Get-HttpResponseBody {
         [System.Exception]$Exception
     )
 
-    if ($null -ne $Exception.ErrorDetails -and -not [string]::IsNullOrWhiteSpace([string]$Exception.ErrorDetails.Message)) {
+    if (
+        $null -ne $Exception.PSObject.Properties['ErrorDetails'] -and
+        $null -ne $Exception.ErrorDetails -and
+        -not [string]::IsNullOrWhiteSpace([string]$Exception.ErrorDetails.Message)
+    ) {
         return [string]$Exception.ErrorDetails.Message
     }
 
@@ -183,7 +187,12 @@ function Invoke-OpenAIResponsesRequest {
         }
         catch {
             $statusCode = Get-HttpStatusCode -Exception $_.Exception
-            $detail = Get-OpenAIErrorDetail -Exception $_.Exception
+            try {
+                $detail = Get-OpenAIErrorDetail -Exception $_.Exception
+            }
+            catch {
+                $detail = "Failed to inspect the original exception detail. Fallback message: $($_.Exception.Message)"
+            }
             $isTimeout = Test-IsTimeoutException -Exception $_.Exception
 
             if (($statusCode -eq 429 -or $isTimeout) -and $attempt -lt $MaxAttempts) {
