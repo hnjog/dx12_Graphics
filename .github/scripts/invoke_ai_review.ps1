@@ -537,6 +537,8 @@ $diffText
     Set-WorkflowOutput -Name 'model_used' -Value $model
 }
 catch {
+    Write-Error "AI review failed: $($_.Exception.Message)"
+
     $review = New-ReviewObject `
         -Summary 'AI review execution failed before a usable result was produced.' `
         -OverallAssessment $_.Exception.Message `
