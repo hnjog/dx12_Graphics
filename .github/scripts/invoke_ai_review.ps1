@@ -133,38 +133,79 @@ function Get-OpenAIErrorDetail {
     return "Response body: $body"
 }
 
+function Test-IsTimeoutException {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Exception]$Exception
+    )
+
+    $current = $Exception
+    while ($null -ne $current) {
+        $typeName = [string]$current.GetType().FullName
+        $message = [string]$current.Message
+
+        if (
+            $typeName -match 'TimeoutException|TaskCanceledException|OperationCanceledException' -or
+            $message -match 'timed out|timeout|request was canceled|operation was canceled|HttpClient\.Timeout'
+        ) {
+            return $true
+        }
+
+        $current = $current.InnerException
+    }
+
+    return $false
+}
+
 function Invoke-OpenAIResponsesRequest {
     param(
         [Parameter(Mandatory = $true)]
         [hashtable]$Headers,
         [Parameter(Mandatory = $true)]
         [hashtable]$Body,
-        [int]$MaxAttempts = 3
+        [int]$MaxAttempts = 3,
+        [int]$TimeoutSeconds = 90
     )
 
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         try {
-            Write-Host "OpenAI Responses API request attempt $attempt/$MaxAttempts"
+            Write-Host "OpenAI Responses API request attempt $attempt/$MaxAttempts (timeout ${TimeoutSeconds}s)"
 
-            return Invoke-RestMethod `
+            $response = Invoke-RestMethod `
                 -Method Post `
                 -Uri 'https://api.openai.com/v1/responses' `
                 -Headers $Headers `
-                -Body ($Body | ConvertTo-Json -Depth 100)
+                -Body ($Body | ConvertTo-Json -Depth 100) `
+                -TimeoutSec $TimeoutSeconds
+
+            Write-Host "OpenAI Responses API request succeeded on attempt $attempt/$MaxAttempts"
+            return $response
         }
         catch {
             $statusCode = Get-HttpStatusCode -Exception $_.Exception
             $detail = Get-OpenAIErrorDetail -Exception $_.Exception
+            $isTimeout = Test-IsTimeoutException -Exception $_.Exception
 
-            if ($statusCode -eq 429 -and $attempt -lt $MaxAttempts) {
+            if (($statusCode -eq 429 -or $isTimeout) -and $attempt -lt $MaxAttempts) {
                 $delaySeconds = [Math]::Min(20, [int][Math]::Pow(2, $attempt))
-                Write-Warning "OpenAI request hit HTTP 429 on attempt $attempt/$MaxAttempts. Retrying in $delaySeconds seconds. Detail: $detail"
+
+                if ($statusCode -eq 429) {
+                    Write-Warning "OpenAI request hit HTTP 429 on attempt $attempt/$MaxAttempts. Retrying in $delaySeconds seconds. Detail: $detail"
+                }
+                elseif ($isTimeout) {
+                    Write-Warning "OpenAI request timed out on attempt $attempt/$MaxAttempts. Retrying in $delaySeconds seconds. Detail: $detail"
+                }
+
                 Start-Sleep -Seconds $delaySeconds
                 continue
             }
 
             if ($statusCode -eq 429) {
                 throw "OpenAI Responses API failed after $MaxAttempts attempts. $detail"
+            }
+
+            if ($isTimeout) {
+                throw "OpenAI Responses API request timed out after $MaxAttempts attempts with timeout ${TimeoutSeconds}s. $detail"
             }
 
             throw "OpenAI Responses API request failed. $detail"
@@ -272,6 +313,14 @@ if ([string]::IsNullOrWhiteSpace($baseRef)) {
 $model = $env:OPENAI_MODEL
 if ([string]::IsNullOrWhiteSpace($model)) {
     $model = 'gpt-5.4-mini'
+}
+
+$requestTimeoutSeconds = 90
+if (-not [string]::IsNullOrWhiteSpace($env:OPENAI_TIMEOUT_SECONDS)) {
+    $parsedTimeoutSeconds = 0
+    if ([int]::TryParse($env:OPENAI_TIMEOUT_SECONDS, [ref]$parsedTimeoutSeconds) -and $parsedTimeoutSeconds -gt 0) {
+        $requestTimeoutSeconds = $parsedTimeoutSeconds
+    }
 }
 
 $event = $null
@@ -458,7 +507,7 @@ $diffText
         'Content-Type' = 'application/json'
     }
 
-    $response = Invoke-OpenAIResponsesRequest -Headers $headers -Body $body
+    $response = Invoke-OpenAIResponsesRequest -Headers $headers -Body $body -TimeoutSeconds $requestTimeoutSeconds
 
     $rawText = Get-ResponseText -Response $response
     if ([string]::IsNullOrWhiteSpace($rawText)) {
