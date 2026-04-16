@@ -1,0 +1,100 @@
+name: AI Review
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ai_review:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run AI review
+        id: ai_review
+        shell: pwsh
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          AI_REVIEW_BASE_REF: ${{ github.base_ref }}
+        run: ./.github/scripts/invoke_ai_review.ps1
+
+      - name: Upsert pull request comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        env:
+          AI_REVIEW_COMMENT_PATH: ${{ steps.ai_review.outputs.comment_path }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- ai-review-bot -->';
+            const issue_number = context.payload.pull_request.number;
+            const body = `${marker}\n${fs.readFileSync(process.env.AI_REVIEW_COMMENT_PATH, 'utf8')}`;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number
+            });
+
+            const existing = comments.find((comment) =>
+              comment.user &&
+              comment.user.type === 'Bot' &&
+              typeof comment.body === 'string' &&
+              comment.body.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number,
+                body
+              });
+            }
+
+      - name: Notify Slack
+        if: always()
+        shell: pwsh
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          AI_REVIEW_STATUS: ${{ steps.ai_review.outputs.review_status }}
+          AI_REVIEW_SHOULD_NOTIFY_SLACK: ${{ steps.ai_review.outputs.should_notify_slack }}
+          AI_REVIEW_BLOCKER_COUNT: ${{ steps.ai_review.outputs.blocker_count }}
+          AI_REVIEW_MAJOR_COUNT: ${{ steps.ai_review.outputs.major_count }}
+          AI_REVIEW_MINOR_COUNT: ${{ steps.ai_review.outputs.minor_count }}
+          AI_REVIEW_SUGGESTION_COUNT: ${{ steps.ai_review.outputs.suggestion_count }}
+          AI_REVIEW_COMMENT_PATH: ${{ steps.ai_review.outputs.comment_path }}
+          AI_REVIEW_BASE_REF: ${{ github.base_ref }}
+        run: ./.github/scripts/send_slack_review.ps1
+
+      - name: Fail workflow if AI review execution failed
+        if: steps.ai_review.outputs.review_status == 'failed'
+        run: exit 1

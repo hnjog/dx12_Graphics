@@ -1,0 +1,378 @@
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+function Set-WorkflowOutput {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    if ($env:GITHUB_OUTPUT) {
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "$Name=$Value"
+    }
+}
+
+function Get-ResponseText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Response
+    )
+
+    $texts = New-Object System.Collections.Generic.List[string]
+    foreach ($message in @($Response.output)) {
+        if ($null -eq $message -or $message.type -ne 'message') {
+            continue
+        }
+
+        foreach ($content in @($message.content)) {
+            if ($null -ne $content -and $content.type -eq 'output_text' -and $content.text) {
+                $texts.Add([string]$content.text)
+            }
+        }
+    }
+
+    return ($texts -join "`n")
+}
+
+function New-ReviewObject {
+    param(
+        [string]$Summary,
+        [string]$OverallAssessment,
+        [string]$RiskLevel,
+        [array]$Findings,
+        [bool]$ShouldNotifySlack,
+        [string]$SlackReason
+    )
+
+    return [pscustomobject]@{
+        summary              = $Summary
+        overall_assessment   = $OverallAssessment
+        risk_level           = $RiskLevel
+        findings             = $Findings
+        should_notify_slack  = $ShouldNotifySlack
+        slack_reason         = $SlackReason
+    }
+}
+
+function Write-ReviewMarkdown {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Status,
+        [Parameter(Mandatory = $true)]
+        [string]$Model,
+        [Parameter(Mandatory = $true)]
+        [string]$BaseRef,
+        [Parameter(Mandatory = $true)]
+        [object]$Review,
+        [string]$DiffNote
+    )
+
+    $findings = @($Review.findings)
+    $blockerCount = @($findings | Where-Object { $_.severity -eq 'Blocker' }).Count
+    $majorCount = @($findings | Where-Object { $_.severity -eq 'Major' }).Count
+    $minorCount = @($findings | Where-Object { $_.severity -eq 'Minor' }).Count
+    $suggestionCount = @($findings | Where-Object { $_.severity -eq 'Suggestion' }).Count
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('## AI Review')
+    $lines.Add('')
+    $lines.Add("- Status: $Status")
+    $lines.Add("- Model: $Model")
+    $lines.Add("- Base branch: $BaseRef")
+    $lines.Add("- Risk level: $($Review.risk_level)")
+    $lines.Add("- Findings: Blocker $blockerCount / Major $majorCount / Minor $minorCount / Suggestion $suggestionCount")
+    $lines.Add('')
+    $lines.Add('### Summary')
+    $lines.Add($Review.summary)
+    $lines.Add('')
+    $lines.Add('### Overall Assessment')
+    $lines.Add($Review.overall_assessment)
+    $lines.Add('')
+    $lines.Add('### Findings')
+
+    if ($findings.Count -eq 0) {
+        $lines.Add('- No issues were reported by the AI review.')
+    }
+    else {
+        $index = 1
+        foreach ($finding in $findings) {
+            $location = [string]$finding.file
+            if ([int]$finding.line_start -gt 0) {
+                $location = "${location}:$($finding.line_start)"
+            }
+
+            $lines.Add("$index. [$($finding.severity)] $($finding.title)")
+            $lines.Add('   - Location: `' + $location + '`')
+            $lines.Add("   - Risk: $($finding.risk)")
+            $lines.Add("   - Recommendation: $($finding.recommendation)")
+            $lines.Add("   - Confidence: $($finding.confidence)")
+            $index++
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($DiffNote)) {
+        $lines.Add('')
+        $lines.Add("> $DiffNote")
+    }
+
+    Set-Content -Path $Path -Value ($lines -join "`n") -Encoding utf8
+}
+
+$tempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { (Get-Location).Path }
+$commentPath = Join-Path $tempRoot 'ai-review-comment.md'
+$summaryPath = Join-Path $tempRoot 'ai-review-summary.md'
+
+$baseRef = $env:AI_REVIEW_BASE_REF
+if ([string]::IsNullOrWhiteSpace($baseRef)) {
+    $baseRef = 'develop'
+}
+
+$model = $env:OPENAI_MODEL
+if ([string]::IsNullOrWhiteSpace($model)) {
+    $model = 'gpt-5.4-mini'
+}
+
+$event = $null
+if ($env:GITHUB_EVENT_PATH -and (Test-Path -LiteralPath $env:GITHUB_EVENT_PATH)) {
+    $event = Get-Content -LiteralPath $env:GITHUB_EVENT_PATH -Raw -Encoding utf8 | ConvertFrom-Json
+}
+
+$pr = $null
+if ($null -ne $event -and $null -ne $event.pull_request) {
+    $pr = $event.pull_request
+    if (-not [string]::IsNullOrWhiteSpace([string]$pr.base.ref)) {
+        $baseRef = [string]$pr.base.ref
+    }
+}
+
+$diffNote = ''
+
+try {
+    $reviewRules = Get-Content -LiteralPath 'docs/review-rules.md' -Raw -Encoding utf8
+    $testingStrategy = Get-Content -LiteralPath 'docs/testing-strategy.md' -Raw -Encoding utf8
+    $prTemplate = Get-Content -LiteralPath '.github/pull_request_template.md' -Raw -Encoding utf8
+
+    if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) {
+        $review = New-ReviewObject `
+            -Summary 'AI review was skipped because the OPENAI_API_KEY secret is not configured.' `
+            -OverallAssessment 'Configure the repository secret and rerun the workflow before relying on AI review output.' `
+            -RiskLevel 'unknown' `
+            -Findings @() `
+            -ShouldNotifySlack $false `
+            -SlackReason 'missing_openai_api_key'
+
+        Write-ReviewMarkdown -Path $commentPath -Status 'skipped' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
+        Write-ReviewMarkdown -Path $summaryPath -Status 'skipped' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
+        Get-Content -LiteralPath $summaryPath -Raw | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+        Set-WorkflowOutput -Name 'review_status' -Value 'skipped'
+        Set-WorkflowOutput -Name 'comment_path' -Value $commentPath
+        Set-WorkflowOutput -Name 'summary_path' -Value $summaryPath
+        Set-WorkflowOutput -Name 'blocker_count' -Value '0'
+        Set-WorkflowOutput -Name 'major_count' -Value '0'
+        Set-WorkflowOutput -Name 'minor_count' -Value '0'
+        Set-WorkflowOutput -Name 'suggestion_count' -Value '0'
+        Set-WorkflowOutput -Name 'should_notify_slack' -Value 'false'
+        Set-WorkflowOutput -Name 'model_used' -Value $model
+        exit 0
+    }
+
+    $null = git fetch --no-tags --depth=1 origin $baseRef
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to fetch origin/$baseRef for AI review context."
+    }
+
+    $compareRange = "origin/$baseRef...HEAD"
+    $changedFiles = @(git diff --name-only $compareRange)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to collect changed files for compare range $compareRange."
+    }
+
+    $diffText = git diff --unified=3 --no-color $compareRange | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to collect diff for compare range $compareRange."
+    }
+
+    $maxDiffLength = 120000
+    if ($diffText.Length -gt $maxDiffLength) {
+        $diffText = $diffText.Substring(0, $maxDiffLength)
+        $diffNote = "Diff was truncated to the first $maxDiffLength characters to keep the AI review request bounded."
+    }
+
+    if ($changedFiles.Count -eq 0) {
+        $review = New-ReviewObject `
+            -Summary 'No file diff was found for this compare range, so AI review did not report issues.' `
+            -OverallAssessment 'Check that the PR target branch is correct and rerun the workflow if this was unexpected.' `
+            -RiskLevel 'low' `
+            -Findings @() `
+            -ShouldNotifySlack $false `
+            -SlackReason 'no_diff'
+
+        Write-ReviewMarkdown -Path $commentPath -Status 'skipped' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
+        Write-ReviewMarkdown -Path $summaryPath -Status 'skipped' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
+        Get-Content -LiteralPath $summaryPath -Raw | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+        Set-WorkflowOutput -Name 'review_status' -Value 'skipped'
+        Set-WorkflowOutput -Name 'comment_path' -Value $commentPath
+        Set-WorkflowOutput -Name 'summary_path' -Value $summaryPath
+        Set-WorkflowOutput -Name 'blocker_count' -Value '0'
+        Set-WorkflowOutput -Name 'major_count' -Value '0'
+        Set-WorkflowOutput -Name 'minor_count' -Value '0'
+        Set-WorkflowOutput -Name 'suggestion_count' -Value '0'
+        Set-WorkflowOutput -Name 'should_notify_slack' -Value 'false'
+        Set-WorkflowOutput -Name 'model_used' -Value $model
+        exit 0
+    }
+
+    $prTitle = if ($null -ne $pr) { [string]$pr.title } else { '' }
+    $prBody = if ($null -ne $pr) { [string]$pr.body } else { '' }
+    $prUrl = if ($null -ne $pr) { [string]$pr.html_url } else { '' }
+    $headRef = if ($null -ne $pr) { [string]$pr.head.ref } else { [string]$env:GITHUB_REF_NAME }
+
+    $instructions = @"
+You are reviewing a pull request for the dx12_Graphics repository.
+Prioritize correctness, regressions, DirectX 12 resource lifetime, synchronization, state transitions, API misuse, and missing verification over style comments.
+Only raise findings that materially matter to the repository's stated review rules.
+If a concern depends on an assumption, say so in the finding instead of stating it as a fact.
+Return at most 8 findings.
+"@
+
+    $userPrompt = @"
+Repository review rules:
+$reviewRules
+
+Repository testing strategy:
+$testingStrategy
+
+Pull request template:
+$prTemplate
+
+Pull request metadata:
+- Title: $prTitle
+- URL: $prUrl
+- Base branch: $baseRef
+- Head branch: $headRef
+
+Pull request body:
+$prBody
+
+Changed files:
+$($changedFiles -join "`n")
+
+Unified diff:
+$diffText
+"@
+
+    $schema = @{
+        type                 = 'object'
+        additionalProperties = $false
+        properties           = @{
+            summary             = @{ type = 'string' }
+            overall_assessment  = @{ type = 'string' }
+            risk_level          = @{ type = 'string'; enum = @('low', 'medium', 'high', 'unknown') }
+            findings            = @{
+                type  = 'array'
+                items = @{
+                    type                 = 'object'
+                    additionalProperties = $false
+                    properties           = @{
+                        severity       = @{ type = 'string'; enum = @('Blocker', 'Major', 'Minor', 'Suggestion') }
+                        title          = @{ type = 'string' }
+                        file           = @{ type = 'string' }
+                        line_start     = @{ type = 'integer'; minimum = 0 }
+                        line_end       = @{ type = 'integer'; minimum = 0 }
+                        risk           = @{ type = 'string' }
+                        recommendation = @{ type = 'string' }
+                        confidence     = @{ type = 'number'; minimum = 0; maximum = 1 }
+                    }
+                    required             = @('severity', 'title', 'file', 'line_start', 'line_end', 'risk', 'recommendation', 'confidence')
+                }
+            }
+            should_notify_slack = @{ type = 'boolean' }
+            slack_reason        = @{ type = 'string' }
+        }
+        required             = @('summary', 'overall_assessment', 'risk_level', 'findings', 'should_notify_slack', 'slack_reason')
+    }
+
+    $body = @{
+        model       = $model
+        instructions = $instructions
+        input       = $userPrompt
+        reasoning   = @{
+            effort = 'medium'
+        }
+        text        = @{
+            format = @{
+                type   = 'json_schema'
+                name   = 'ai_review_result'
+                strict = $true
+                schema = $schema
+            }
+        }
+    }
+
+    $headers = @{
+        Authorization = "Bearer $($env:OPENAI_API_KEY)"
+        'Content-Type' = 'application/json'
+    }
+
+    $response = Invoke-RestMethod `
+        -Method Post `
+        -Uri 'https://api.openai.com/v1/responses' `
+        -Headers $headers `
+        -Body ($body | ConvertTo-Json -Depth 100)
+
+    $rawText = Get-ResponseText -Response $response
+    if ([string]::IsNullOrWhiteSpace($rawText)) {
+        throw 'OpenAI response did not contain output_text content.'
+    }
+
+    $review = $rawText | ConvertFrom-Json
+
+    Write-ReviewMarkdown -Path $commentPath -Status 'completed' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
+    Write-ReviewMarkdown -Path $summaryPath -Status 'completed' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
+    Get-Content -LiteralPath $summaryPath -Raw | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+    $findings = @($review.findings)
+    $blockerCount = @($findings | Where-Object { $_.severity -eq 'Blocker' }).Count
+    $majorCount = @($findings | Where-Object { $_.severity -eq 'Major' }).Count
+    $minorCount = @($findings | Where-Object { $_.severity -eq 'Minor' }).Count
+    $suggestionCount = @($findings | Where-Object { $_.severity -eq 'Suggestion' }).Count
+
+    Set-WorkflowOutput -Name 'review_status' -Value 'completed'
+    Set-WorkflowOutput -Name 'comment_path' -Value $commentPath
+    Set-WorkflowOutput -Name 'summary_path' -Value $summaryPath
+    Set-WorkflowOutput -Name 'blocker_count' -Value ([string]$blockerCount)
+    Set-WorkflowOutput -Name 'major_count' -Value ([string]$majorCount)
+    Set-WorkflowOutput -Name 'minor_count' -Value ([string]$minorCount)
+    Set-WorkflowOutput -Name 'suggestion_count' -Value ([string]$suggestionCount)
+    Set-WorkflowOutput -Name 'should_notify_slack' -Value (([bool]$review.should_notify_slack).ToString().ToLowerInvariant())
+    Set-WorkflowOutput -Name 'model_used' -Value $model
+}
+catch {
+    $review = New-ReviewObject `
+        -Summary 'AI review execution failed before a usable result was produced.' `
+        -OverallAssessment $_.Exception.Message `
+        -RiskLevel 'unknown' `
+        -Findings @() `
+        -ShouldNotifySlack $true `
+        -SlackReason 'workflow_failed'
+
+    Write-ReviewMarkdown -Path $commentPath -Status 'failed' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
+    Write-ReviewMarkdown -Path $summaryPath -Status 'failed' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
+    Get-Content -LiteralPath $summaryPath -Raw | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+    Set-WorkflowOutput -Name 'review_status' -Value 'failed'
+    Set-WorkflowOutput -Name 'comment_path' -Value $commentPath
+    Set-WorkflowOutput -Name 'summary_path' -Value $summaryPath
+    Set-WorkflowOutput -Name 'blocker_count' -Value '0'
+    Set-WorkflowOutput -Name 'major_count' -Value '0'
+    Set-WorkflowOutput -Name 'minor_count' -Value '0'
+    Set-WorkflowOutput -Name 'suggestion_count' -Value '0'
+    Set-WorkflowOutput -Name 'should_notify_slack' -Value 'true'
+    Set-WorkflowOutput -Name 'model_used' -Value $model
+}
