@@ -244,6 +244,50 @@ function New-ReviewObject {
     }
 }
 
+function Get-LocalizedStatusLabel {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Status
+    )
+
+    switch ($Status) {
+        'completed' { return '완료' }
+        'failed' { return '실패' }
+        'skipped' { return '건너뜀' }
+        default { return $Status }
+    }
+}
+
+function Get-LocalizedRiskLevel {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RiskLevel
+    )
+
+    switch ($RiskLevel) {
+        'low' { return '낮음' }
+        'medium' { return '보통' }
+        'high' { return '높음' }
+        'unknown' { return '알 수 없음' }
+        default { return $RiskLevel }
+    }
+}
+
+function Get-LocalizedSeverity {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Severity
+    )
+
+    switch ($Severity) {
+        'Blocker' { return '차단' }
+        'Major' { return '주요' }
+        'Minor' { return '경미' }
+        'Suggestion' { return '제안' }
+        default { return $Severity }
+    }
+}
+
 function Write-ReviewMarkdown {
     param(
         [Parameter(Mandatory = $true)]
@@ -265,25 +309,28 @@ function Write-ReviewMarkdown {
     $minorCount = @($findings | Where-Object { $_.severity -eq 'Minor' }).Count
     $suggestionCount = @($findings | Where-Object { $_.severity -eq 'Suggestion' }).Count
 
+    $localizedStatus = Get-LocalizedStatusLabel -Status $Status
+    $localizedRiskLevel = Get-LocalizedRiskLevel -RiskLevel ([string]$Review.risk_level)
+
     $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add('## AI Review')
+    $lines.Add('## AI 리뷰')
     $lines.Add('')
-    $lines.Add("- Status: $Status")
-    $lines.Add("- Model: $Model")
-    $lines.Add("- Base branch: $BaseRef")
-    $lines.Add("- Risk level: $($Review.risk_level)")
-    $lines.Add("- Findings: Blocker $blockerCount / Major $majorCount / Minor $minorCount / Suggestion $suggestionCount")
+    $lines.Add("- 상태: $localizedStatus")
+    $lines.Add("- 모델: $Model")
+    $lines.Add("- 기준 브랜치: $BaseRef")
+    $lines.Add("- 위험도: $localizedRiskLevel")
+    $lines.Add("- 이슈 수: 차단 $blockerCount / 주요 $majorCount / 경미 $minorCount / 제안 $suggestionCount")
     $lines.Add('')
-    $lines.Add('### Summary')
+    $lines.Add('### 요약')
     $lines.Add($Review.summary)
     $lines.Add('')
-    $lines.Add('### Overall Assessment')
+    $lines.Add('### 종합 판단')
     $lines.Add($Review.overall_assessment)
     $lines.Add('')
-    $lines.Add('### Findings')
+    $lines.Add('### 세부 이슈')
 
     if ($findings.Count -eq 0) {
-        $lines.Add('- No issues were reported by the AI review.')
+        $lines.Add('- AI 리뷰에서 보고된 이슈가 없습니다.')
     }
     else {
         $index = 1
@@ -293,11 +340,13 @@ function Write-ReviewMarkdown {
                 $location = "${location}:$($finding.line_start)"
             }
 
-            $lines.Add("$index. [$($finding.severity)] $($finding.title)")
-            $lines.Add('   - Location: `' + $location + '`')
-            $lines.Add("   - Risk: $($finding.risk)")
-            $lines.Add("   - Recommendation: $($finding.recommendation)")
-            $lines.Add("   - Confidence: $($finding.confidence)")
+            $localizedSeverity = Get-LocalizedSeverity -Severity ([string]$finding.severity)
+
+            $lines.Add("$index. [$localizedSeverity] $($finding.title)")
+            $lines.Add('   - 위치: `' + $location + '`')
+            $lines.Add("   - 위험: $($finding.risk)")
+            $lines.Add("   - 권장 대응: $($finding.recommendation)")
+            $lines.Add("   - 신뢰도: $($finding.confidence)")
             $index++
         }
     }
@@ -354,8 +403,8 @@ try {
 
     if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) {
         $review = New-ReviewObject `
-            -Summary 'AI review was skipped because the OPENAI_API_KEY secret is not configured.' `
-            -OverallAssessment 'Configure the repository secret and rerun the workflow before relying on AI review output.' `
+            -Summary 'OPENAI_API_KEY secret이 설정되지 않아 AI 리뷰를 건너뛰었습니다.' `
+            -OverallAssessment '저장소 secret을 설정한 뒤 workflow를 다시 실행해야 AI 리뷰 결과를 신뢰할 수 있습니다.' `
             -RiskLevel 'unknown' `
             -Findings @() `
             -ShouldNotifySlack $false `
@@ -396,13 +445,13 @@ try {
     $maxDiffLength = 120000
     if ($diffText.Length -gt $maxDiffLength) {
         $diffText = $diffText.Substring(0, $maxDiffLength)
-        $diffNote = "Diff was truncated to the first $maxDiffLength characters to keep the AI review request bounded."
+        $diffNote = "AI 리뷰 요청 길이를 제한하기 위해 diff를 앞쪽 $maxDiffLength자까지만 사용했습니다."
     }
 
     if ($changedFiles.Count -eq 0) {
         $review = New-ReviewObject `
-            -Summary 'No file diff was found for this compare range, so AI review did not report issues.' `
-            -OverallAssessment 'Check that the PR target branch is correct and rerun the workflow if this was unexpected.' `
+            -Summary '현재 compare range에서 파일 diff를 찾지 못해 AI 리뷰 이슈를 보고하지 않았습니다.' `
+            -OverallAssessment '예상과 다르다면 PR 대상 브랜치를 확인한 뒤 workflow를 다시 실행해 주세요.' `
             -RiskLevel 'low' `
             -Findings @() `
             -ShouldNotifySlack $false `
@@ -435,6 +484,9 @@ Prioritize correctness, regressions, DirectX 12 resource lifetime, synchronizati
 Only raise findings that materially matter to the repository's stated review rules.
 If a concern depends on an assumption, say so in the finding instead of stating it as a fact.
 Return at most 8 findings.
+Write all user-facing prose in Korean.
+Keep enum values exactly as specified in the schema.
+Keep slack_reason as a short snake_case English identifier.
 "@
 
     $userPrompt = @"
@@ -549,8 +601,8 @@ catch {
     Write-Error "AI review failed: $($_.Exception.Message)"
 
     $review = New-ReviewObject `
-        -Summary 'AI review execution failed before a usable result was produced.' `
-        -OverallAssessment $_.Exception.Message `
+        -Summary '사용 가능한 리뷰 결과를 만들기 전에 AI 리뷰 실행이 실패했습니다.' `
+        -OverallAssessment "실패 원인: $($_.Exception.Message)" `
         -RiskLevel 'unknown' `
         -Findings @() `
         -ShouldNotifySlack $true `

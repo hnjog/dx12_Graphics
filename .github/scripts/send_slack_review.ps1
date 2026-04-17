@@ -2,12 +2,12 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($env:SLACK_WEBHOOK_URL)) {
-    Write-Host 'SLACK_WEBHOOK_URL is not configured. Skipping Slack notification.'
+    Write-Host 'SLACK_WEBHOOK_URL이 설정되지 않아 Slack 알림을 건너뜁니다.'
     exit 0
 }
 
 if ($env:AI_REVIEW_SHOULD_NOTIFY_SLACK -ne 'true') {
-    Write-Host 'AI review result does not require Slack notification.'
+    Write-Host '현재 AI 리뷰 결과는 Slack 알림 대상이 아닙니다.'
     exit 0
 }
 
@@ -36,13 +36,20 @@ try {
         }
     }
 
+    $localizedStatus = switch ([string]$env:AI_REVIEW_STATUS) {
+        'completed' { '완료' }
+        'failed' { '실패' }
+        'skipped' { '건너뜀' }
+        default { [string]$env:AI_REVIEW_STATUS }
+    }
+
     $message = @"
-[AI Review] $($env:AI_REVIEW_STATUS)
+[AI 리뷰] $localizedStatus
 PR: $prTitle
-Base: $baseRef
-Head: $headRef
-Findings: Blocker $($env:AI_REVIEW_BLOCKER_COUNT) / Major $($env:AI_REVIEW_MAJOR_COUNT) / Minor $($env:AI_REVIEW_MINOR_COUNT) / Suggestion $($env:AI_REVIEW_SUGGESTION_COUNT)
-Link: $prUrl
+기준 브랜치: $baseRef
+작업 브랜치: $headRef
+이슈 수: 차단 $($env:AI_REVIEW_BLOCKER_COUNT) / 주요 $($env:AI_REVIEW_MAJOR_COUNT) / 경미 $($env:AI_REVIEW_MINOR_COUNT) / 제안 $($env:AI_REVIEW_SUGGESTION_COUNT)
+링크: $prUrl
 
 $summaryText
 "@
@@ -57,8 +64,8 @@ $summaryText
         -ContentType 'application/json' `
         -Body ($payload | ConvertTo-Json -Depth 10) | Out-Null
 
-    Write-Host 'Slack notification sent.'
+    Write-Host 'Slack 알림을 전송했습니다.'
 }
 catch {
-    Write-Warning "Slack notification failed: $($_.Exception.Message)"
+    Write-Warning "Slack 알림 전송에 실패했습니다: $($_.Exception.Message)"
 }
