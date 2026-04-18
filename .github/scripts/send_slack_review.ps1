@@ -1,12 +1,40 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Get-IntFromEnv {
+    param(
+        [string]$Value
+    )
+
+    $parsedValue = 0
+    if ([int]::TryParse($Value, [ref]$parsedValue)) {
+        return $parsedValue
+    }
+
+    return 0
+}
+
 if ([string]::IsNullOrWhiteSpace($env:SLACK_WEBHOOK_URL)) {
     Write-Host 'SLACK_WEBHOOK_URL이 설정되지 않아 Slack 알림을 건너뜁니다.'
     exit 0
 }
 
-if ($env:AI_REVIEW_SHOULD_NOTIFY_SLACK -ne 'true') {
+$blockerCount = Get-IntFromEnv -Value $env:AI_REVIEW_BLOCKER_COUNT
+$majorCount = Get-IntFromEnv -Value $env:AI_REVIEW_MAJOR_COUNT
+$minorCount = Get-IntFromEnv -Value $env:AI_REVIEW_MINOR_COUNT
+$shouldNotifySlack = $false
+
+if ($env:AI_REVIEW_STATUS -eq 'failed') {
+    $shouldNotifySlack = $true
+}
+elseif ($blockerCount -gt 0 -or $majorCount -gt 0) {
+    $shouldNotifySlack = $true
+}
+elseif ($env:AI_REVIEW_SHOULD_NOTIFY_SLACK -eq 'true') {
+    $shouldNotifySlack = $true
+}
+
+if (-not $shouldNotifySlack) {
     Write-Host '현재 AI 리뷰 결과는 Slack 알림 대상이 아닙니다.'
     exit 0
 }
@@ -48,7 +76,7 @@ try {
 PR: $prTitle
 기준 브랜치: $baseRef
 작업 브랜치: $headRef
-이슈 수: 차단 $($env:AI_REVIEW_BLOCKER_COUNT) / 주요 $($env:AI_REVIEW_MAJOR_COUNT) / 경미 $($env:AI_REVIEW_MINOR_COUNT) / 제안 $($env:AI_REVIEW_SUGGESTION_COUNT)
+이슈 수: 차단 $blockerCount / 주요 $majorCount / 경미 $minorCount / 제안 $($env:AI_REVIEW_SUGGESTION_COUNT)
 링크: $prUrl
 
 $summaryText

@@ -288,6 +288,163 @@ function Get-LocalizedSeverity {
     }
 }
 
+function Get-BoundedText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Text,
+        [Parameter(Mandatory = $true)]
+        [int]$MaxLength,
+        [string]$Label = 'text'
+    )
+
+    if ($MaxLength -le 0 -or [string]::IsNullOrEmpty($Text) -or $Text.Length -le $MaxLength) {
+        return $Text
+    }
+
+    return $Text.Substring(0, $MaxLength) + "`n`n[Truncated $Label to first $MaxLength characters.]"
+}
+
+function Get-ReviewFilePlan {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Paths
+    )
+
+    $plans = foreach ($path in $Paths) {
+        $normalizedPath = ([string]$path).Replace('\', '/').ToLowerInvariant()
+        $extension = [System.IO.Path]::GetExtension($normalizedPath).ToLowerInvariant()
+        $score = 0
+        $contextLines = 1
+        $priorityLabel = 'low'
+
+        if ($extension -in @('.cpp', '.c', '.cc', '.h', '.hpp', '.hxx', '.inl', '.hlsl', '.hlsli')) {
+            $score += 60
+            $contextLines = 2
+            $priorityLabel = 'medium'
+        }
+        elseif ($extension -in @('.ps1', '.yml', '.yaml', '.json', '.vcxproj', '.filters', '.props', '.targets')) {
+            $score += 35
+            $contextLines = 2
+            $priorityLabel = 'medium'
+        }
+        elseif ($extension -eq '.md') {
+            $score += 10
+        }
+
+        if (
+            $normalizedPath -match 'dx12|renderer|rendering|mesh|shader|rootsignature|root-signature|descriptor|swapchain|command|fence|resource|platform/win32' -or
+            $normalizedPath -match '^dx12engine/source/'
+        ) {
+            $score += 120
+            $contextLines = 3
+            $priorityLabel = 'high'
+        }
+        elseif ($normalizedPath -match 'source/|app/|platform/|scripts/|workflows/') {
+            $score += 40
+            $contextLines = [Math]::Max($contextLines, 2)
+            if ($priorityLabel -ne 'high') {
+                $priorityLabel = 'medium'
+            }
+        }
+
+        if ($normalizedPath -match '^docs/' -or $extension -eq '.md') {
+            $score -= 15
+        }
+
+        [pscustomobject]@{
+            path          = $path
+            score         = $score
+            context_lines = $contextLines
+            priority      = $priorityLabel
+        }
+    }
+
+    return @(
+        $plans |
+            Sort-Object `
+                -Property `
+                    @{ Expression = { [int]$_.score }; Descending = $true }, `
+                    @{ Expression = { [string]$_.path }; Descending = $false }
+    )
+}
+
+function Get-BoundedDiffByFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CompareRange,
+        [Parameter(Mandatory = $true)]
+        [object[]]$FilePlans,
+        [Parameter(Mandatory = $true)]
+        [int]$MaxLength
+    )
+
+    $sections = New-Object System.Collections.Generic.List[string]
+    $includedFileCount = 0
+    $truncatedFilePath = ''
+    $remainingFileCount = 0
+
+    foreach ($plan in $FilePlans) {
+        $filePath = [string]$plan.path
+        $contextLines = [int]$plan.context_lines
+        $priorityLabel = [string]$plan.priority
+
+        $fileDiff = (& git diff "--unified=$contextLines" --no-color $CompareRange -- $filePath) | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to collect diff for file $filePath in compare range $CompareRange."
+        }
+
+        if ([string]::IsNullOrWhiteSpace($fileDiff)) {
+            continue
+        }
+
+        $section = @"
+### FILE: $filePath (priority=$priorityLabel, unified=$contextLines)
+$($fileDiff.TrimEnd())
+
+"@
+
+        $currentLength = ($sections -join '').Length
+        $remainingLength = $MaxLength - $currentLength
+        if ($remainingLength -le 0) {
+            $truncatedFilePath = $filePath
+            break
+        }
+
+        if ($section.Length -le $remainingLength) {
+            $sections.Add($section)
+            $includedFileCount++
+            continue
+        }
+
+        $prefix = "### FILE: $filePath (priority=$priorityLabel, unified=$contextLines)`n"
+        $availableForBody = $remainingLength - $prefix.Length - 48
+        if ($availableForBody -gt 0) {
+            $trimmedBody = $fileDiff.TrimEnd()
+            if ($trimmedBody.Length -gt $availableForBody) {
+                $trimmedBody = $trimmedBody.Substring(0, $availableForBody)
+            }
+
+            $sections.Add($prefix + $trimmedBody + "`n[Diff truncated for this file]`n")
+        }
+
+        $includedFileCount++
+        $truncatedFilePath = $filePath
+        break
+    }
+
+    if ($includedFileCount -lt $FilePlans.Count) {
+        $remainingFileCount = $FilePlans.Count - $includedFileCount
+    }
+
+    return [pscustomobject]@{
+        text                 = ($sections -join '')
+        included_file_count  = $includedFileCount
+        remaining_file_count = $remainingFileCount
+        truncated_file_path  = $truncatedFilePath
+    }
+}
+
 function Write-ReviewMarkdown {
     param(
         [Parameter(Mandatory = $true)]
@@ -399,7 +556,6 @@ $diffNote = ''
 try {
     $reviewRules = Get-Content -LiteralPath 'docs/review-rules.md' -Raw -Encoding utf8
     $testingStrategy = Get-Content -LiteralPath 'docs/testing-strategy.md' -Raw -Encoding utf8
-    $prTemplate = Get-Content -LiteralPath '.github/pull_request_template.md' -Raw -Encoding utf8
 
     if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) {
         $review = New-ReviewObject `
@@ -437,17 +593,6 @@ try {
         throw "Failed to collect changed files for compare range $compareRange."
     }
 
-    $diffText = git diff --unified=3 --no-color $compareRange | Out-String
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to collect diff for compare range $compareRange."
-    }
-
-    $maxDiffLength = 120000
-    if ($diffText.Length -gt $maxDiffLength) {
-        $diffText = $diffText.Substring(0, $maxDiffLength)
-        $diffNote = "AI 리뷰 요청 길이를 제한하기 위해 diff를 앞쪽 $maxDiffLength자까지만 사용했습니다."
-    }
-
     if ($changedFiles.Count -eq 0) {
         $review = New-ReviewObject `
             -Summary '현재 compare range에서 파일 diff를 찾지 못해 AI 리뷰 이슈를 보고하지 않았습니다.' `
@@ -477,6 +622,25 @@ try {
     $prBody = if ($null -ne $pr) { [string]$pr.body } else { '' }
     $prUrl = if ($null -ne $pr) { [string]$pr.html_url } else { '' }
     $headRef = if ($null -ne $pr) { [string]$pr.head.ref } else { [string]$env:GITHUB_REF_NAME }
+    $filePlans = Get-ReviewFilePlan -Paths $changedFiles
+    $diffBundle = Get-BoundedDiffByFile -CompareRange $compareRange -FilePlans $filePlans -MaxLength 60000
+    $diffText = [string]$diffBundle.text
+    if ([string]::IsNullOrWhiteSpace($diffText)) {
+        throw "Failed to build prioritized diff text for compare range $compareRange."
+    }
+
+    if ($diffBundle.remaining_file_count -gt 0) {
+        $diffNote = "AI 리뷰 요청 길이를 제한하기 위해 중요도가 높은 파일 순으로 diff를 구성했습니다. 포함 파일 수: $($diffBundle.included_file_count), 제외 파일 수: $($diffBundle.remaining_file_count), 마지막 절단 파일: $($diffBundle.truncated_file_path)"
+    }
+
+    $reviewRulesForPrompt = Get-BoundedText -Text $reviewRules -MaxLength 4500 -Label 'review rules'
+    $testingStrategyForPrompt = Get-BoundedText -Text $testingStrategy -MaxLength 3500 -Label 'testing strategy'
+    $prBodyForPrompt = Get-BoundedText -Text $prBody -MaxLength 5000 -Label 'pull request body'
+    $changedFilesForPrompt = @($filePlans.path | Select-Object -First 80)
+    $changedFilesNote = ''
+    if ($changedFiles.Count -gt $changedFilesForPrompt.Count) {
+        $changedFilesNote = "Changed files list was sorted by review priority and truncated to the first $($changedFilesForPrompt.Count) entries."
+    }
 
     $instructions = @"
 You are reviewing a pull request for the dx12_Graphics repository.
@@ -490,14 +654,11 @@ Keep slack_reason as a short snake_case English identifier.
 "@
 
     $userPrompt = @"
-Repository review rules:
-$reviewRules
+Repository review rules (excerpt):
+$reviewRulesForPrompt
 
-Repository testing strategy:
-$testingStrategy
-
-Pull request template:
-$prTemplate
+Repository testing strategy (excerpt):
+$testingStrategyForPrompt
 
 Pull request metadata:
 - Title: $prTitle
@@ -506,10 +667,12 @@ Pull request metadata:
 - Head branch: $headRef
 
 Pull request body:
-$prBody
+$prBodyForPrompt
 
 Changed files:
-$($changedFiles -join "`n")
+$($changedFilesForPrompt -join "`n")
+
+$changedFilesNote
 
 Unified diff:
 $diffText
@@ -551,7 +714,7 @@ $diffText
         instructions = $instructions
         input       = $userPrompt
         reasoning   = @{
-            effort = 'medium'
+            effort = 'low'
         }
         text        = @{
             format = @{
