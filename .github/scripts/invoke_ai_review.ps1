@@ -288,6 +288,23 @@ function Get-LocalizedSeverity {
     }
 }
 
+function Get-BoundedText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Text,
+        [Parameter(Mandatory = $true)]
+        [int]$MaxLength,
+        [string]$Label = 'text'
+    )
+
+    if ($MaxLength -le 0 -or [string]::IsNullOrEmpty($Text) -or $Text.Length -le $MaxLength) {
+        return $Text
+    }
+
+    return $Text.Substring(0, $MaxLength) + "`n`n[Truncated $Label to first $MaxLength characters.]"
+}
+
 function Write-ReviewMarkdown {
     param(
         [Parameter(Mandatory = $true)]
@@ -399,7 +416,6 @@ $diffNote = ''
 try {
     $reviewRules = Get-Content -LiteralPath 'docs/review-rules.md' -Raw -Encoding utf8
     $testingStrategy = Get-Content -LiteralPath 'docs/testing-strategy.md' -Raw -Encoding utf8
-    $prTemplate = Get-Content -LiteralPath '.github/pull_request_template.md' -Raw -Encoding utf8
 
     if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) {
         $review = New-ReviewObject `
@@ -437,12 +453,12 @@ try {
         throw "Failed to collect changed files for compare range $compareRange."
     }
 
-    $diffText = git diff --unified=3 --no-color $compareRange | Out-String
+    $diffText = git diff --unified=1 --no-color $compareRange | Out-String
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to collect diff for compare range $compareRange."
     }
 
-    $maxDiffLength = 120000
+    $maxDiffLength = 60000
     if ($diffText.Length -gt $maxDiffLength) {
         $diffText = $diffText.Substring(0, $maxDiffLength)
         $diffNote = "AI 리뷰 요청 길이를 제한하기 위해 diff를 앞쪽 $maxDiffLength자까지만 사용했습니다."
@@ -477,6 +493,14 @@ try {
     $prBody = if ($null -ne $pr) { [string]$pr.body } else { '' }
     $prUrl = if ($null -ne $pr) { [string]$pr.html_url } else { '' }
     $headRef = if ($null -ne $pr) { [string]$pr.head.ref } else { [string]$env:GITHUB_REF_NAME }
+    $reviewRulesForPrompt = Get-BoundedText -Text $reviewRules -MaxLength 4500 -Label 'review rules'
+    $testingStrategyForPrompt = Get-BoundedText -Text $testingStrategy -MaxLength 3500 -Label 'testing strategy'
+    $prBodyForPrompt = Get-BoundedText -Text $prBody -MaxLength 5000 -Label 'pull request body'
+    $changedFilesForPrompt = @($changedFiles | Select-Object -First 80)
+    $changedFilesNote = ''
+    if ($changedFiles.Count -gt $changedFilesForPrompt.Count) {
+        $changedFilesNote = "Changed files list was truncated to the first $($changedFilesForPrompt.Count) entries."
+    }
 
     $instructions = @"
 You are reviewing a pull request for the dx12_Graphics repository.
@@ -490,14 +514,11 @@ Keep slack_reason as a short snake_case English identifier.
 "@
 
     $userPrompt = @"
-Repository review rules:
-$reviewRules
+Repository review rules (excerpt):
+$reviewRulesForPrompt
 
-Repository testing strategy:
-$testingStrategy
-
-Pull request template:
-$prTemplate
+Repository testing strategy (excerpt):
+$testingStrategyForPrompt
 
 Pull request metadata:
 - Title: $prTitle
@@ -506,10 +527,12 @@ Pull request metadata:
 - Head branch: $headRef
 
 Pull request body:
-$prBody
+$prBodyForPrompt
 
 Changed files:
-$($changedFiles -join "`n")
+$($changedFilesForPrompt -join "`n")
+
+$changedFilesNote
 
 Unified diff:
 $diffText
@@ -551,7 +574,7 @@ $diffText
         instructions = $instructions
         input       = $userPrompt
         reasoning   = @{
-            effort = 'medium'
+            effort = 'low'
         }
         text        = @{
             format = @{
