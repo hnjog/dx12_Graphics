@@ -48,6 +48,7 @@
 - `docs/architecture.md`
 - `docs/testing-strategy.md`
 - `docs/ai-collaboration-workflow.md`
+- `docs/ai-review-workflow.md`
 - `docs/ai-usage-evidence.md`
 - `CONTRIBUTING.md`
 - `.github/pull_request_template.md`
