@@ -1,0 +1,442 @@
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+function Set-WorkflowOutput {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    if ($env:GITHUB_OUTPUT) {
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "$Name=$Value"
+    }
+}
+
+function Write-JsonUtf8 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [object]$Value
+    )
+
+    $Value | ConvertTo-Json -Depth 100 | Set-Content -Path $Path -Encoding utf8
+}
+
+function Read-JsonUtf8 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    return (Get-Content -LiteralPath $Path -Raw -Encoding utf8 | ConvertFrom-Json)
+}
+
+function Get-ResponseText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Response
+    )
+
+    $texts = New-Object System.Collections.Generic.List[string]
+    foreach ($message in @($Response.output)) {
+        if ($null -eq $message -or $message.type -ne 'message') {
+            continue
+        }
+
+        foreach ($content in @($message.content)) {
+            if ($null -ne $content -and $content.type -eq 'output_text' -and $content.text) {
+                $texts.Add([string]$content.text)
+            }
+        }
+    }
+
+    return ($texts -join "`n")
+}
+
+function Get-HttpStatusCode {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Exception]$Exception
+    )
+
+    if ($null -ne $Exception.PSObject.Properties['Response'] -and $null -ne $Exception.Response) {
+        $statusCode = $Exception.Response.StatusCode
+        if ($statusCode -is [int]) {
+            return [int]$statusCode
+        }
+
+        if ($null -ne $statusCode) {
+            return [int]$statusCode.value__
+        }
+    }
+
+    return $null
+}
+
+function Get-HttpResponseBody {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Exception]$Exception
+    )
+
+    if (
+        $null -ne $Exception.PSObject.Properties['ErrorDetails'] -and
+        $null -ne $Exception.ErrorDetails -and
+        -not [string]::IsNullOrWhiteSpace([string]$Exception.ErrorDetails.Message)
+    ) {
+        return [string]$Exception.ErrorDetails.Message
+    }
+
+    if ($null -ne $Exception.PSObject.Properties['Response'] -and $null -ne $Exception.Response -and $null -ne $Exception.Response.Content) {
+        try {
+            return $Exception.Response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        }
+        catch {
+            return ''
+        }
+    }
+
+    return ''
+}
+
+function Get-OpenAIErrorDetail {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Exception]$Exception
+    )
+
+    $statusCode = Get-HttpStatusCode -Exception $Exception
+    $body = Get-HttpResponseBody -Exception $Exception
+
+    if ([string]::IsNullOrWhiteSpace($body)) {
+        if ($null -ne $statusCode) {
+            return "HTTP $statusCode. $($Exception.Message)"
+        }
+
+        return $Exception.Message
+    }
+
+    try {
+        $parsed = $body | ConvertFrom-Json
+        if ($null -ne $parsed.error) {
+            $message = [string]$parsed.error.message
+            $type = [string]$parsed.error.type
+            $code = [string]$parsed.error.code
+            $parts = New-Object System.Collections.Generic.List[string]
+
+            if ($null -ne $statusCode) {
+                $parts.Add("HTTP $statusCode")
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($type)) {
+                $parts.Add("type=$type")
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($code)) {
+                $parts.Add("code=$code")
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($message)) {
+                $parts.Add("message=$message")
+            }
+
+            return ($parts -join ', ')
+        }
+    }
+    catch {
+        # Fall back to the raw body below.
+    }
+
+    if ($null -ne $statusCode) {
+        return "HTTP $statusCode. Response body: $body"
+    }
+
+    return "Response body: $body"
+}
+
+function Test-IsTimeoutException {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Exception]$Exception
+    )
+
+    $current = $Exception
+    while ($null -ne $current) {
+        $typeName = [string]$current.GetType().FullName
+        $message = [string]$current.Message
+
+        if (
+            $typeName -match 'TimeoutException|TaskCanceledException|OperationCanceledException' -or
+            $message -match 'timed out|timeout|request was canceled|operation was canceled|HttpClient\.Timeout'
+        ) {
+            return $true
+        }
+
+        $current = $current.InnerException
+    }
+
+    return $false
+}
+
+function Invoke-OpenAIResponsesRequest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Headers,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Body,
+        [int]$MaxAttempts = 3,
+        [int]$TimeoutSeconds = 90
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            Write-Host "OpenAI Responses API request attempt $attempt/$MaxAttempts (timeout ${TimeoutSeconds}s)"
+
+            $response = Invoke-RestMethod `
+                -Method Post `
+                -Uri 'https://api.openai.com/v1/responses' `
+                -Headers $Headers `
+                -Body ($Body | ConvertTo-Json -Depth 100) `
+                -TimeoutSec $TimeoutSeconds
+
+            Write-Host "OpenAI Responses API request succeeded on attempt $attempt/$MaxAttempts"
+            return $response
+        }
+        catch {
+            $statusCode = Get-HttpStatusCode -Exception $_.Exception
+            $detail = Get-OpenAIErrorDetail -Exception $_.Exception
+            $isTimeout = Test-IsTimeoutException -Exception $_.Exception
+
+            if (($statusCode -eq 429 -or $isTimeout) -and $attempt -lt $MaxAttempts) {
+                $delaySeconds = [Math]::Min(20, [int][Math]::Pow(2, $attempt))
+                Start-Sleep -Seconds $delaySeconds
+                continue
+            }
+
+            if ($statusCode -eq 429) {
+                throw "OpenAI Responses API failed after $MaxAttempts attempts. $detail"
+            }
+
+            if ($isTimeout) {
+                throw "OpenAI Responses API request timed out after $MaxAttempts attempts with timeout ${TimeoutSeconds}s. $detail"
+            }
+
+            throw "OpenAI Responses API request failed. $detail"
+        }
+    }
+
+    throw 'OpenAI Responses API request failed without returning a response.'
+}
+
+function Get-BoundedText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Text,
+        [Parameter(Mandatory = $true)]
+        [int]$MaxLength,
+        [string]$Label = 'text'
+    )
+
+    if ($MaxLength -le 0 -or [string]::IsNullOrEmpty($Text) -or $Text.Length -le $MaxLength) {
+        return $Text
+    }
+
+    return $Text.Substring(0, $MaxLength) + "`n`n[Truncated $Label to first $MaxLength characters.]"
+}
+
+function Get-ReviewFilePlan {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Paths
+    )
+
+    $plans = foreach ($path in $Paths) {
+        $normalizedPath = ([string]$path).Replace('\', '/').ToLowerInvariant()
+        $extension = [System.IO.Path]::GetExtension($normalizedPath).ToLowerInvariant()
+        $score = 0
+        $contextLines = 1
+        $priorityLabel = 'low'
+
+        if ($extension -in @('.cpp', '.c', '.cc', '.h', '.hpp', '.hxx', '.inl', '.hlsl', '.hlsli')) {
+            $score += 60
+            $contextLines = 2
+            $priorityLabel = 'medium'
+        }
+        elseif ($extension -in @('.ps1', '.yml', '.yaml', '.json', '.vcxproj', '.filters', '.props', '.targets')) {
+            $score += 35
+            $contextLines = 2
+            $priorityLabel = 'medium'
+        }
+        elseif ($extension -eq '.md') {
+            $score += 10
+        }
+
+        if (
+            $normalizedPath -match 'dx12|renderer|rendering|mesh|shader|rootsignature|root-signature|descriptor|swapchain|command|fence|resource|platform/win32' -or
+            $normalizedPath -match '^dx12engine/'
+        ) {
+            $score += 120
+            $contextLines = 3
+            $priorityLabel = 'high'
+        }
+        elseif ($normalizedPath -match 'source/|app/|platform/|scripts/|workflows/') {
+            $score += 40
+            $contextLines = [Math]::Max($contextLines, 2)
+            if ($priorityLabel -ne 'high') {
+                $priorityLabel = 'medium'
+            }
+        }
+
+        if ($normalizedPath -match '^docs/' -or $extension -eq '.md') {
+            $score -= 15
+        }
+
+        [pscustomobject]@{
+            path          = $path
+            score         = $score
+            context_lines = $contextLines
+            priority      = $priorityLabel
+        }
+    }
+
+    return @(
+        $plans |
+            Sort-Object `
+                -Property `
+                    @{ Expression = { [int]$_.score }; Descending = $true }, `
+                    @{ Expression = { [string]$_.path }; Descending = $false }
+    )
+}
+
+function Get-BoundedDiffByFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CompareRange,
+        [Parameter(Mandatory = $true)]
+        [object[]]$FilePlans,
+        [Parameter(Mandatory = $true)]
+        [int]$MaxLength
+    )
+
+    $sections = New-Object System.Collections.Generic.List[string]
+    $includedFileCount = 0
+    $truncatedFilePath = ''
+    $remainingFileCount = 0
+
+    foreach ($plan in $FilePlans) {
+        $filePath = [string]$plan.path
+        $contextLines = [int]$plan.context_lines
+        $priorityLabel = [string]$plan.priority
+
+        $fileDiff = (& git diff "--unified=$contextLines" --no-color $CompareRange -- $filePath) | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to collect diff for file $filePath in compare range $CompareRange."
+        }
+
+        if ([string]::IsNullOrWhiteSpace($fileDiff)) {
+            continue
+        }
+
+        $section = @"
+### FILE: $filePath (priority=$priorityLabel, unified=$contextLines)
+$($fileDiff.TrimEnd())
+
+"@
+
+        $currentLength = ($sections -join '').Length
+        $remainingLength = $MaxLength - $currentLength
+        if ($remainingLength -le 0) {
+            $truncatedFilePath = $filePath
+            break
+        }
+
+        if ($section.Length -le $remainingLength) {
+            $sections.Add($section)
+            $includedFileCount++
+            continue
+        }
+
+        $prefix = "### FILE: $filePath (priority=$priorityLabel, unified=$contextLines)`n"
+        $availableForBody = $remainingLength - $prefix.Length - 48
+        if ($availableForBody -gt 0) {
+            $trimmedBody = $fileDiff.TrimEnd()
+            if ($trimmedBody.Length -gt $availableForBody) {
+                $trimmedBody = $trimmedBody.Substring(0, $availableForBody)
+            }
+
+            $sections.Add($prefix + $trimmedBody + "`n[Diff truncated for this file]`n")
+        }
+
+        $includedFileCount++
+        $truncatedFilePath = $filePath
+        break
+    }
+
+    if ($includedFileCount -lt $FilePlans.Count) {
+        $remainingFileCount = $FilePlans.Count - $includedFileCount
+    }
+
+    return [pscustomobject]@{
+        text                 = ($sections -join '')
+        included_file_count  = $includedFileCount
+        remaining_file_count = $remainingFileCount
+        truncated_file_path  = $truncatedFilePath
+    }
+}
+
+function Get-TempRoot {
+    if ($env:RUNNER_TEMP) {
+        return $env:RUNNER_TEMP
+    }
+
+    return (Get-Location).Path
+}
+
+function Get-OrchestrationScopeTags {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$ChangedFiles
+    )
+
+    $tags = New-Object System.Collections.Generic.HashSet[string]
+
+    if ($ChangedFiles.Count -eq 0) {
+        $tags.Add('no_diff') | Out-Null
+        return @($tags)
+    }
+
+    $docsOnly = $true
+    foreach ($path in $ChangedFiles) {
+        $normalizedPath = ([string]$path).Replace('\', '/').ToLowerInvariant()
+        $extension = [System.IO.Path]::GetExtension($normalizedPath).ToLowerInvariant()
+
+        if ($normalizedPath -match '^docs/' -or $extension -eq '.md') {
+            $tags.Add('docs') | Out-Null
+        }
+        else {
+            $docsOnly = $false
+        }
+
+        if ($normalizedPath -match '^\.github/' -or $extension -in @('.ps1', '.yml', '.yaml')) {
+            $tags.Add('automation') | Out-Null
+        }
+
+        if ($normalizedPath -match 'dx12|renderer|swapchain|command|fence|resource|descriptor|platform/win32') {
+            $tags.Add('dx12_high_risk') | Out-Null
+        }
+
+        if ($normalizedPath -match '\.(cpp|c|cc|h|hpp|hxx|inl|hlsl|hlsli)$') {
+            $tags.Add('code') | Out-Null
+        }
+    }
+
+    if ($docsOnly) {
+        $tags.Add('docs_only') | Out-Null
+    }
+
+    return @($tags | Sort-Object)
+}
