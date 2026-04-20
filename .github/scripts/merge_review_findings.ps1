@@ -88,6 +88,11 @@ function Get-DeterministicMergedResult {
     $blockerCount = @($uniqueFindings | Where-Object { $_.severity -eq 'Blocker' }).Count
     $majorCount = @($uniqueFindings | Where-Object { $_.severity -eq 'Major' }).Count
     $hasFailedSpecialist = @($SpecialistResults | Where-Object { $_.review_status -eq 'failed' }).Count -gt 0
+    $verificationSkipIsSafe = $false
+    if ($null -ne $Verification.PSObject.Properties['skip_is_safe']) {
+        $verificationSkipIsSafe = [bool]$Verification.skip_is_safe
+    }
+    $verificationSkippedUnsafe = $Verification.verification_status -eq 'skipped' -and -not $verificationSkipIsSafe
 
     $humanGateRequired = $false
     $humanGateReason = ''
@@ -95,9 +100,14 @@ function Get-DeterministicMergedResult {
     $finalDecision = 'pass'
     $riskLevel = 'low'
 
-    if ($Verification.verification_status -eq 'failed' -or $hasFailedSpecialist) {
+    if ($Verification.verification_status -eq 'failed' -or $verificationSkippedUnsafe -or $hasFailedSpecialist) {
         $humanGateRequired = $true
-        $humanGateReason = 'verification_or_review_failed'
+        if ($verificationSkippedUnsafe) {
+            $humanGateReason = 'verification_skipped_unsafely'
+        }
+        else {
+            $humanGateReason = 'verification_or_review_failed'
+        }
         $shouldNotifySlack = $true
         $finalDecision = 'failed'
         $riskLevel = 'high'
@@ -129,7 +139,12 @@ function Get-DeterministicMergedResult {
     $overallAssessment = ''
     switch ($finalDecision) {
         'failed' {
-            $overallAssessment = 'The orchestration or verification stage failed, so a person should review the result.'
+            if ($verificationSkippedUnsafe) {
+                $overallAssessment = 'Verification was skipped for an unsafe reason, so a person should review the result.'
+            }
+            else {
+                $overallAssessment = 'The orchestration or verification stage failed, so a person should review the result.'
+            }
         }
         'needs_human' {
             $overallAssessment = 'A person should make the final decision because major findings remain.'
@@ -188,6 +203,9 @@ function Write-OrchestrationMarkdown {
         $lines.Add("- Human Gate reason: $($MergedReview.human_gate_reason)")
     }
     $lines.Add("- Verification status: $($Verification.verification_status)")
+    if (-not [string]::IsNullOrWhiteSpace([string]$Verification.verification_reason)) {
+        $lines.Add("- Verification reason: $($Verification.verification_reason)")
+    }
     $lines.Add("- Finding counts: blocker $blockerCount / major $majorCount / minor $minorCount / suggestion $suggestionCount")
     $lines.Add("")
     $lines.Add("### Summary")
@@ -204,8 +222,20 @@ function Write-OrchestrationMarkdown {
     $lines.Add("### Verification Result")
     $lines.Add("- Status: $($Verification.verification_status)")
     $lines.Add("- Summary: $($Verification.summary)")
+    if (-not [string]::IsNullOrWhiteSpace([string]$Verification.verification_reason)) {
+        $lines.Add("- Reason: $($Verification.verification_reason)")
+    }
     foreach ($check in @($Verification.checks)) {
         $lines.Add("- $($check.name): $($check.status) - $($check.note)")
+        if ($null -ne $check.PSObject.Properties['exit_code']) {
+            $lines.Add("  - Exit code: $($check.exit_code)")
+        }
+        if ($null -ne $check.PSObject.Properties['log_excerpt'] -and -not [string]::IsNullOrWhiteSpace([string]$check.log_excerpt)) {
+            $lines.Add("  - Log excerpt:")
+            foreach ($line in @(([string]$check.log_excerpt) -split "\r?\n")) {
+                $lines.Add("    $line")
+            }
+        }
     }
     $lines.Add("")
     $lines.Add("### Findings")
@@ -257,8 +287,10 @@ try {
     }
     else {
         $verification = [pscustomobject]@{
-            verification_status = 'skipped'
-            summary             = 'Verification result file was missing, so verification was recorded as skipped.'
+            verification_status = 'failed'
+            summary             = 'Verification result file was missing, so the verification state could not be trusted.'
+            verification_reason = 'missing_result'
+            skip_is_safe        = $false
             checks              = @()
         }
     }
@@ -277,6 +309,8 @@ try {
                 '- needs_human: a person should make the final decision'
                 '- failed: the orchestration or verification state is not trustworthy enough'
                 'Prioritize correctness, DX12 safety, regression risk, and verification results over style comments.'
+                'Only treat verification_status=skipped as acceptable when verification_reason=docs_only and skip_is_safe=true.'
+                'If verification is skipped for any other reason, do not return pass.'
                 'Write concise user-facing prose.'
                 'Keep enum values exactly as specified in the schema.'
                 'Return at most 8 findings.'
@@ -405,6 +439,8 @@ catch {
     $verification = [pscustomobject]@{
         verification_status = 'failed'
         summary             = 'The merge stage failed, so the verification state should not be trusted.'
+        verification_reason = 'merge_failed'
+        skip_is_safe        = $false
         checks              = @()
     }
 
