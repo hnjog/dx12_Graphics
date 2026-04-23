@@ -1,0 +1,154 @@
+name: AI Orchestrator MVP
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: ai-orchestrator-mvp-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  orchestrator_mvp:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Collect review context
+        id: collect_context
+        shell: pwsh
+        env:
+          AI_REVIEW_BASE_REF: ${{ github.base_ref }}
+        run: ./.github/scripts/collect_review_context.ps1
+
+      - name: DX12 lifetime and sync specialist review
+        id: review_dx12
+        shell: pwsh
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          REVIEW_CONTEXT_PATH: ${{ steps.collect_context.outputs.review_context_path }}
+          SPECIALIST_REVIEWER: dx12_lifetime_sync
+        run: ./.github/scripts/invoke_specialist_review.ps1
+
+      - name: Regression and testing specialist review
+        id: review_regression
+        shell: pwsh
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          REVIEW_CONTEXT_PATH: ${{ steps.collect_context.outputs.review_context_path }}
+          SPECIALIST_REVIEWER: regression_testing
+        run: ./.github/scripts/invoke_specialist_review.ps1
+
+      - name: Run verification gate
+        id: verify
+        shell: pwsh
+        env:
+          REVIEW_CONTEXT_PATH: ${{ steps.collect_context.outputs.review_context_path }}
+        run: ./.github/scripts/run_verification.ps1
+
+      - name: Merge specialist findings
+        id: merge_findings
+        shell: pwsh
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          REVIEW_CONTEXT_PATH: ${{ steps.collect_context.outputs.review_context_path }}
+          DX12_REVIEW_PATH: ${{ steps.review_dx12.outputs.result_path }}
+          REGRESSION_REVIEW_PATH: ${{ steps.review_regression.outputs.result_path }}
+          VERIFICATION_RESULT_PATH: ${{ steps.verify.outputs.verification_result_path }}
+        run: ./.github/scripts/merge_review_findings.ps1
+
+      - name: Add summary to workflow
+        if: always()
+        shell: pwsh
+        env:
+          ORCHESTRATION_SUMMARY_PATH: ${{ steps.merge_findings.outputs.summary_path }}
+        run: |
+          if ($env:GITHUB_STEP_SUMMARY -and $env:ORCHESTRATION_SUMMARY_PATH -and (Test-Path -LiteralPath $env:ORCHESTRATION_SUMMARY_PATH)) {
+            Get-Content -LiteralPath $env:ORCHESTRATION_SUMMARY_PATH -Raw -Encoding utf8 | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Upsert pull request comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        env:
+          ORCHESTRATION_COMMENT_PATH: ${{ steps.merge_findings.outputs.comment_path }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- ai-orchestrator-mvp -->';
+            const issue_number = context.payload.pull_request.number;
+            const body = `${marker}\n${fs.readFileSync(process.env.ORCHESTRATION_COMMENT_PATH, 'utf8')}`;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number
+            });
+
+            const existing = comments.find((comment) =>
+              comment.user &&
+              comment.user.type === 'Bot' &&
+              typeof comment.body === 'string' &&
+              comment.body.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number,
+                body
+              });
+            }
+
+      - name: Notify Slack
+        if: always()
+        shell: pwsh
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          AI_REVIEW_BASE_REF: ${{ github.base_ref }}
+          ORCH_REVIEW_STATUS: ${{ steps.merge_findings.outputs.review_status }}
+          ORCH_FINAL_DECISION: ${{ steps.merge_findings.outputs.final_decision }}
+          ORCH_HUMAN_GATE_REQUIRED: ${{ steps.merge_findings.outputs.human_gate_required }}
+          ORCH_SHOULD_NOTIFY_SLACK: ${{ steps.merge_findings.outputs.should_notify_slack }}
+          ORCH_BLOCKER_COUNT: ${{ steps.merge_findings.outputs.blocker_count }}
+          ORCH_MAJOR_COUNT: ${{ steps.merge_findings.outputs.major_count }}
+          ORCH_MINOR_COUNT: ${{ steps.merge_findings.outputs.minor_count }}
+          ORCH_SUGGESTION_COUNT: ${{ steps.merge_findings.outputs.suggestion_count }}
+          ORCH_COMMENT_PATH: ${{ steps.merge_findings.outputs.comment_path }}
+          ORCH_VERIFICATION_STATUS: ${{ steps.verify.outputs.verification_status }}
+        run: ./.github/scripts/send_slack_orchestration.ps1
+
+      - name: Fail workflow if orchestration execution failed
+        if: steps.merge_findings.outputs.review_status == 'failed' || steps.verify.outputs.verification_status == 'failed'
+        run: exit 1
