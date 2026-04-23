@@ -56,12 +56,14 @@ function Get-UniqueFindings {
     $unique = @()
 
     foreach ($finding in $Findings) {
-        $key = "{0}|{1}|{2}|{3}|{4}" -f `
+        $key = "{0}|{1}|{2}|{3}|{4}|{5}|{6}" -f `
             ([string]$finding.severity), `
             ([string]$finding.file), `
             ([string]$finding.title), `
             ([string]$finding.line_start), `
-            ([string]$finding.line_end)
+            ([string]$finding.line_end), `
+            ([string]$finding.risk), `
+            ([string]$finding.recommendation)
 
         if ($seen.Add($key)) {
             $unique += $finding

@@ -23,22 +23,81 @@ if ($null -ne $event -and $null -ne $event.pull_request) {
 
 $diffNote = ''
 
-try {
-    $reviewRules = Get-Content -LiteralPath 'docs/review-rules.md' -Raw -Encoding utf8
-    $testingStrategy = Get-Content -LiteralPath 'docs/testing-strategy.md' -Raw -Encoding utf8
-    $prTemplate = Get-Content -LiteralPath '.github/pull_request_template.md' -Raw -Encoding utf8
+function Add-DiffNote {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Note
+    )
 
-    $null = git fetch --no-tags --depth=1 origin $baseRef
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to fetch origin/$baseRef for orchestration context."
+    if ([string]::IsNullOrWhiteSpace($Note)) {
+        return
     }
 
-    $compareRange = "origin/$baseRef...HEAD"
-    $changedFiles = @(git diff --name-only $compareRange)
+    if ([string]::IsNullOrWhiteSpace($script:diffNote)) {
+        $script:diffNote = $Note
+    }
+    else {
+        $script:diffNote = "$script:diffNote`n$Note"
+    }
+}
+
+function Get-OptionalText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Label
+    )
+
+    if (Test-Path -LiteralPath $Path) {
+        return (Get-Content -LiteralPath $Path -Raw -Encoding utf8)
+    }
+
+    return "[$Label was not found at $Path. Continue review with the available PR context.]"
+}
+
+function Test-GitRef {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Ref
+    )
+
+    $null = git rev-parse --verify --quiet $Ref
+    return ($LASTEXITCODE -eq 0)
+}
+
+try {
+    $reviewRules = Get-OptionalText -Path 'docs/review-rules.md' -Label 'review rules'
+    $testingStrategy = Get-OptionalText -Path 'docs/testing-strategy.md' -Label 'testing strategy'
+    $prTemplate = Get-OptionalText -Path '.github/pull_request_template.md' -Label 'pull request template'
+
+    $baseRemoteRef = "origin/$baseRef"
+    $fetchRefSpec = "+refs/heads/{0}:refs/remotes/origin/{0}" -f $baseRef
+    $null = git fetch --no-tags origin $fetchRefSpec
+    if ($LASTEXITCODE -ne 0) {
+        if (Test-GitRef -Ref $baseRemoteRef) {
+            Add-DiffNote -Note "Failed to refresh $baseRemoteRef, so the existing local remote ref was used."
+        }
+        else {
+            throw "Failed to fetch $baseRemoteRef for orchestration context."
+        }
+    }
+
+    $mergeBaseOutput = git merge-base HEAD $baseRemoteRef
+    $mergeBaseExitCode = $LASTEXITCODE
+    $mergeBase = [string](@($mergeBaseOutput | Select-Object -First 1))
+    if ($mergeBaseExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($mergeBase)) {
+        $mergeBase = $baseRemoteRef
+        Add-DiffNote -Note "merge-base를 안정적으로 계산하지 못해 $baseRemoteRef 기준 diff로 대체했습니다. 리뷰 결과는 실제 PR diff와 다를 수 있습니다."
+    }
+
+    $compareRange = "$mergeBase...HEAD"
+    $changedFilesOutput = git diff --name-only $compareRange
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to collect changed files for compare range $compareRange."
     }
 
+    $changedFiles = @($changedFilesOutput | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
     $prTitle = if ($null -ne $pr) { [string]$pr.title } else { '' }
     $prBody = if ($null -ne $pr) { [string]$pr.body } else { '' }
     $prUrl = if ($null -ne $pr) { [string]$pr.html_url } else { '' }
@@ -53,13 +112,16 @@ try {
         $diffText = [string]$diffBundle.text
 
         if ($diffBundle.remaining_file_count -gt 0) {
-            $diffNote = "오케스트레이션 입력 길이를 제한하기 위해 중요도가 높은 파일 순으로 diff를 구성했습니다. 포함 파일 수: $($diffBundle.included_file_count), 제외 파일 수: $($diffBundle.remaining_file_count), 마지막 절단 파일: $($diffBundle.truncated_file_path)"
+            Add-DiffNote -Note "오케스트레이션 입력 길이를 제한하기 위해 중요도가 높은 파일 순으로 diff를 구성했습니다. 포함 파일 수: $($diffBundle.included_file_count), 제외 파일 수: $($diffBundle.remaining_file_count), 마지막 절단 파일: $($diffBundle.truncated_file_path). 제외된 파일이 있으므로 specialist review는 부분 diff 기반 결과로 해석해야 합니다."
         }
 
         $changedFilesForPrompt = @($filePlans.path | Select-Object -First 80)
         if ($changedFiles.Count -gt $changedFilesForPrompt.Count) {
             $changedFilesNote = "Changed files list was sorted by review priority and truncated to the first $($changedFilesForPrompt.Count) entries."
         }
+    }
+    else {
+        $changedFilesForPrompt = @()
     }
 
     $context = [pscustomobject]@{
@@ -70,6 +132,7 @@ try {
         pr_body                  = $prBody
         pr_url                   = $prUrl
         compare_range            = if ($changedFiles.Count -gt 0) { $compareRange } else { '' }
+        merge_base               = [string]$mergeBase
         changed_files            = $changedFiles
         changed_files_note       = $changedFilesNote
         scope_tags               = $scopeTags
@@ -98,6 +161,7 @@ catch {
         pr_body                  = ''
         pr_url                   = ''
         compare_range            = ''
+        merge_base               = ''
         changed_files            = @()
         changed_files_note       = ''
         scope_tags               = @('context_collection_failed')

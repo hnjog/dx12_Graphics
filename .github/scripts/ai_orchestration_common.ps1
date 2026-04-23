@@ -5,12 +5,21 @@ function Set-WorkflowOutput {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Name,
-        [Parameter(Mandatory = $true)]
-        [string]$Value
+        [AllowNull()]
+        [string]$Value = ''
     )
 
     if ($env:GITHUB_OUTPUT) {
-        Add-Content -Path $env:GITHUB_OUTPUT -Value "$Name=$Value"
+        $safeValue = [string]$Value
+        if ($safeValue -match "[`r`n]") {
+            $delimiter = "EOF_$([guid]::NewGuid().ToString('N'))"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "$Name<<$delimiter" -Encoding utf8
+            Add-Content -Path $env:GITHUB_OUTPUT -Value $safeValue -Encoding utf8
+            Add-Content -Path $env:GITHUB_OUTPUT -Value $delimiter -Encoding utf8
+        }
+        else {
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "$Name=$safeValue" -Encoding utf8
+        }
     }
 }
 
