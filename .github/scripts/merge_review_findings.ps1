@@ -73,6 +73,108 @@ function Get-UniqueFindings {
     return ,$unique
 }
 
+function Get-SpecialistExecutionStats {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [object[]]$SpecialistResults
+    )
+
+    $completedCount = @($SpecialistResults | Where-Object { $_.review_status -eq 'completed' }).Count
+    $skippedCount = @($SpecialistResults | Where-Object { $_.review_status -eq 'skipped' }).Count
+    $failedCount = @($SpecialistResults | Where-Object { $_.review_status -eq 'failed' }).Count
+
+    return [pscustomobject]@{
+        completed = $completedCount
+        skipped   = $skippedCount
+        failed    = $failedCount
+        total     = @($SpecialistResults).Count
+    }
+}
+
+function Get-VerificationSafety {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Verification
+    )
+
+    $skipIsSafe = $false
+    if ($null -ne $Verification.PSObject.Properties['skip_is_safe']) {
+        $skipIsSafe = [bool]$Verification.skip_is_safe
+    }
+
+    $status = [string]$Verification.verification_status
+    return [pscustomobject]@{
+        skip_is_safe  = $skipIsSafe
+        unsafe_skip   = $status -eq 'skipped' -and -not $skipIsSafe
+        failed        = $status -eq 'failed'
+        reason        = [string]$Verification.verification_reason
+    }
+}
+
+function Apply-FinalDecisionGuard {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$MergedReview,
+        [Parameter(Mandatory = $true)]
+        [object]$Verification,
+        [Parameter(Mandatory = $true)]
+        [object[]]$SpecialistResults
+    )
+
+    $verificationSafety = Get-VerificationSafety -Verification $Verification
+    $specialistStats = Get-SpecialistExecutionStats -SpecialistResults $SpecialistResults
+    $guardReason = ''
+    $targetDecision = ''
+
+    if ($verificationSafety.failed) {
+        $guardReason = 'verification_failed'
+        $targetDecision = 'failed'
+    }
+    elseif ($verificationSafety.unsafe_skip) {
+        $guardReason = 'verification_skipped_unsafely'
+        $targetDecision = 'failed'
+    }
+    elseif ($specialistStats.failed -gt 0) {
+        $guardReason = 'specialist_review_failed'
+        $targetDecision = 'needs_human'
+    }
+    elseif ($specialistStats.completed -eq 0) {
+        $guardReason = 'specialist_reviews_unavailable'
+        $targetDecision = 'needs_human'
+    }
+
+    if ([string]::IsNullOrWhiteSpace($guardReason)) {
+        return $MergedReview
+    }
+
+    if ([string]$MergedReview.final_decision -ne 'failed' -and $targetDecision -eq 'failed') {
+        $MergedReview.final_decision = 'failed'
+        $MergedReview.risk_level = 'high'
+    }
+    elseif ([string]$MergedReview.final_decision -eq 'pass') {
+        $MergedReview.final_decision = $targetDecision
+        if ([string]$MergedReview.risk_level -eq 'low') {
+            $MergedReview.risk_level = 'medium'
+        }
+    }
+
+    $MergedReview.human_gate_required = $true
+    $MergedReview.should_notify_slack = $true
+    if ([string]::IsNullOrWhiteSpace([string]$MergedReview.human_gate_reason) -or [string]$MergedReview.human_gate_reason -eq 'none') {
+        $MergedReview.human_gate_reason = $guardReason
+    }
+    elseif ([string]$MergedReview.human_gate_reason -notmatch [regex]::Escape($guardReason)) {
+        $MergedReview.human_gate_reason = "$($MergedReview.human_gate_reason); $guardReason"
+    }
+
+    if ([string]$MergedReview.overall_assessment -notmatch 'Final guard') {
+        $MergedReview.overall_assessment = "$($MergedReview.overall_assessment)`nFinal guard: $guardReason."
+    }
+
+    return $MergedReview
+}
+
 function Get-DeterministicMergedResult {
     param(
         [Parameter(Mandatory = $true)]
@@ -89,12 +191,9 @@ function Get-DeterministicMergedResult {
     $uniqueFindings = Get-UniqueFindings -Findings $allFindings
     $blockerCount = @($uniqueFindings | Where-Object { $_.severity -eq 'Blocker' }).Count
     $majorCount = @($uniqueFindings | Where-Object { $_.severity -eq 'Major' }).Count
-    $hasFailedSpecialist = @($SpecialistResults | Where-Object { $_.review_status -eq 'failed' }).Count -gt 0
-    $verificationSkipIsSafe = $false
-    if ($null -ne $Verification.PSObject.Properties['skip_is_safe']) {
-        $verificationSkipIsSafe = [bool]$Verification.skip_is_safe
-    }
-    $verificationSkippedUnsafe = $Verification.verification_status -eq 'skipped' -and -not $verificationSkipIsSafe
+    $specialistStats = Get-SpecialistExecutionStats -SpecialistResults $SpecialistResults
+    $hasFailedSpecialist = $specialistStats.failed -gt 0
+    $verificationSafety = Get-VerificationSafety -Verification $Verification
 
     $humanGateRequired = $false
     $humanGateReason = ''
@@ -102,9 +201,9 @@ function Get-DeterministicMergedResult {
     $finalDecision = 'pass'
     $riskLevel = 'low'
 
-    if ($Verification.verification_status -eq 'failed' -or $verificationSkippedUnsafe -or $hasFailedSpecialist) {
+    if ($verificationSafety.failed -or $verificationSafety.unsafe_skip -or $hasFailedSpecialist) {
         $humanGateRequired = $true
-        if ($verificationSkippedUnsafe) {
+        if ($verificationSafety.unsafe_skip) {
             $humanGateReason = 'verification_skipped_unsafely'
         }
         else {
@@ -141,7 +240,7 @@ function Get-DeterministicMergedResult {
     $overallAssessment = ''
     switch ($finalDecision) {
         'failed' {
-            if ($verificationSkippedUnsafe) {
+            if ($verificationSafety.unsafe_skip) {
                 $overallAssessment = 'Verification was skipped for an unsafe reason, so a person should review the result.'
             }
             else {
@@ -208,6 +307,8 @@ function Write-OrchestrationMarkdown {
     if (-not [string]::IsNullOrWhiteSpace([string]$Verification.verification_reason)) {
         $lines.Add("- Verification reason: $($Verification.verification_reason)")
     }
+    $specialistStats = Get-SpecialistExecutionStats -SpecialistResults $SpecialistResults
+    $lines.Add("- Specialist execution: completed $($specialistStats.completed) / skipped $($specialistStats.skipped) / failed $($specialistStats.failed)")
     $lines.Add("- Finding counts: blocker $blockerCount / major $majorCount / minor $minorCount / suggestion $suggestionCount")
     $lines.Add("")
     $lines.Add("### Summary")
@@ -217,6 +318,7 @@ function Write-OrchestrationMarkdown {
     $lines.Add([string]$MergedReview.overall_assessment)
     $lines.Add("")
     $lines.Add("### Specialist Review Summary")
+    $lines.Add("- Execution: completed $($specialistStats.completed) / skipped $($specialistStats.skipped) / failed $($specialistStats.failed)")
     foreach ($specialist in $SpecialistResults) {
         $lines.Add("- $([string]$specialist.reviewer): $([string]$specialist.summary)")
     }
@@ -313,6 +415,8 @@ try {
                 'Prioritize correctness, DX12 safety, regression risk, and verification results over style comments.'
                 'Only treat verification_status=skipped as acceptable when verification_reason=docs_only and skip_is_safe=true.'
                 'If verification is skipped for any other reason, do not return pass.'
+                'If every specialist review is skipped, do not return pass.'
+                'If any specialist review failed, require a human gate.'
                 'Write concise user-facing prose.'
                 'Keep enum values exactly as specified in the schema.'
                 'Return at most 8 findings.'
@@ -402,6 +506,8 @@ try {
     else {
         $mergedReview = Get-DeterministicMergedResult -Verification $verification -SpecialistResults $specialistResults
     }
+
+    $mergedReview = Apply-FinalDecisionGuard -MergedReview $mergedReview -Verification $verification -SpecialistResults $specialistResults
 
     Write-OrchestrationMarkdown -Path $commentPath -Context $context -MergedReview $mergedReview -SpecialistResults $specialistResults -Verification $verification
     Write-OrchestrationMarkdown -Path $summaryPath -Context $context -MergedReview $mergedReview -SpecialistResults $specialistResults -Verification $verification
