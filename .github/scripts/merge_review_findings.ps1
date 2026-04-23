@@ -30,19 +30,23 @@ function New-MergedReviewResult {
         [Parameter(Mandatory = $true)]
         [string]$FinalDecision,
         [Parameter(Mandatory = $true)]
-        [string]$ReviewStatus
+        [string]$ReviewStatus,
+        [string]$ModeratorMode = '',
+        [string]$ModeratorFallbackReason = ''
     )
 
     return [pscustomobject]@{
-        summary             = $Summary
-        overall_assessment  = $OverallAssessment
-        risk_level          = $RiskLevel
-        findings            = $Findings
-        human_gate_required = $HumanGateRequired
-        human_gate_reason   = $HumanGateReason
-        should_notify_slack = $ShouldNotifySlack
-        final_decision      = $FinalDecision
-        review_status       = $ReviewStatus
+        summary                   = $Summary
+        overall_assessment        = $OverallAssessment
+        risk_level                = $RiskLevel
+        findings                  = $Findings
+        human_gate_required       = $HumanGateRequired
+        human_gate_reason         = $HumanGateReason
+        should_notify_slack       = $ShouldNotifySlack
+        final_decision            = $FinalDecision
+        review_status             = $ReviewStatus
+        moderator_mode            = $ModeratorMode
+        moderator_fallback_reason = $ModeratorFallbackReason
     }
 }
 
@@ -186,7 +190,9 @@ function Get-DeterministicMergedResult {
         [Parameter(Mandatory = $true)]
         [object]$Verification,
         [Parameter(Mandatory = $true)]
-        [object[]]$SpecialistResults
+        [object[]]$SpecialistResults,
+        [string]$ModeratorMode = 'deterministic',
+        [string]$ModeratorFallbackReason = ''
     )
 
     $allFindings = @()
@@ -270,7 +276,9 @@ function Get-DeterministicMergedResult {
         -HumanGateReason $humanGateReason `
         -ShouldNotifySlack $shouldNotifySlack `
         -FinalDecision $finalDecision `
-        -ReviewStatus 'completed')
+        -ReviewStatus 'completed' `
+        -ModeratorMode $ModeratorMode `
+        -ModeratorFallbackReason $ModeratorFallbackReason)
 }
 
 function Write-OrchestrationMarkdown {
@@ -312,6 +320,12 @@ function Write-OrchestrationMarkdown {
     $lines.Add("- Verification status: $($Verification.verification_status)")
     if (-not [string]::IsNullOrWhiteSpace([string]$Verification.verification_reason)) {
         $lines.Add("- Verification reason: $($Verification.verification_reason)")
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$MergedReview.moderator_mode)) {
+        $lines.Add("- Moderator mode: $($MergedReview.moderator_mode)")
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$MergedReview.moderator_fallback_reason)) {
+        $lines.Add("- Moderator fallback reason: $($MergedReview.moderator_fallback_reason)")
     }
     $specialistStats = Get-SpecialistExecutionStats -SpecialistResults $SpecialistResults
     $lines.Add("- Specialist execution: completed $($specialistStats.completed) / skipped $($specialistStats.skipped) / failed $($specialistStats.failed)")
@@ -504,13 +518,25 @@ try {
 
             $mergedReview = $rawText | ConvertFrom-Json
             $mergedReview | Add-Member -NotePropertyName review_status -NotePropertyValue 'completed' -Force
+            $mergedReview | Add-Member -NotePropertyName moderator_mode -NotePropertyValue 'openai' -Force
+            $mergedReview | Add-Member -NotePropertyName moderator_fallback_reason -NotePropertyValue '' -Force
         }
         catch {
-            $mergedReview = Get-DeterministicMergedResult -Verification $verification -SpecialistResults $specialistResults
+            $fallbackReason = Get-OpenAIErrorDetail -Exception $_.Exception
+            Write-Warning "OpenAI moderator failed; using deterministic fallback. Detail: $fallbackReason"
+            $mergedReview = Get-DeterministicMergedResult `
+                -Verification $verification `
+                -SpecialistResults $specialistResults `
+                -ModeratorMode 'deterministic_fallback' `
+                -ModeratorFallbackReason $fallbackReason
         }
     }
     else {
-        $mergedReview = Get-DeterministicMergedResult -Verification $verification -SpecialistResults $specialistResults
+        $mergedReview = Get-DeterministicMergedResult `
+            -Verification $verification `
+            -SpecialistResults $specialistResults `
+            -ModeratorMode 'deterministic_no_api_key' `
+            -ModeratorFallbackReason 'OPENAI_API_KEY not configured'
     }
 
     $mergedReview = Apply-FinalDecisionGuard -MergedReview $mergedReview -Verification $verification -SpecialistResults $specialistResults -Context $context
@@ -537,6 +563,8 @@ try {
     Set-WorkflowOutput -Name 'human_gate_required' -Value (([bool]$mergedReview.human_gate_required).ToString().ToLowerInvariant())
     Set-WorkflowOutput -Name 'human_gate_reason' -Value ([string]$mergedReview.human_gate_reason)
     Set-WorkflowOutput -Name 'final_decision' -Value ([string]$mergedReview.final_decision)
+    Set-WorkflowOutput -Name 'moderator_mode' -Value ([string]$mergedReview.moderator_mode)
+    Set-WorkflowOutput -Name 'moderator_fallback_reason' -Value ([string]$mergedReview.moderator_fallback_reason)
 }
 catch {
     if (Test-Path -LiteralPath $reviewContextPath) {
@@ -567,7 +595,9 @@ catch {
         -HumanGateReason 'merge_failed' `
         -ShouldNotifySlack $true `
         -FinalDecision 'failed' `
-        -ReviewStatus 'failed'
+        -ReviewStatus 'failed' `
+        -ModeratorMode 'merge_failed' `
+        -ModeratorFallbackReason ([string]$_.Exception.Message)
 
     Write-OrchestrationMarkdown -Path $commentPath -Context $context -MergedReview $mergedReview -SpecialistResults @() -Verification $verification
     Write-OrchestrationMarkdown -Path $summaryPath -Context $context -MergedReview $mergedReview -SpecialistResults @() -Verification $verification
@@ -585,4 +615,6 @@ catch {
     Set-WorkflowOutput -Name 'human_gate_required' -Value 'true'
     Set-WorkflowOutput -Name 'human_gate_reason' -Value 'merge_failed'
     Set-WorkflowOutput -Name 'final_decision' -Value 'failed'
+    Set-WorkflowOutput -Name 'moderator_mode' -Value 'merge_failed'
+    Set-WorkflowOutput -Name 'moderator_fallback_reason' -Value ([string]$_.Exception.Message)
 }
