@@ -185,6 +185,59 @@ function Apply-FinalDecisionGuard {
     return $MergedReview
 }
 
+function Get-ContextOrchestrationPlan {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Context
+    )
+
+    if ($null -ne $Context.PSObject.Properties['orchestration_plan']) {
+        return $Context.orchestration_plan
+    }
+
+    return [pscustomobject]@{
+        mode                   = 'legacy'
+        allow_openai_moderator = $true
+        moderator_policy       = 'always'
+        reason                 = 'missing_orchestration_plan'
+    }
+}
+
+function Test-ShouldUseOpenAiModerator {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Context,
+        [Parameter(Mandatory = $true)]
+        [object]$Verification,
+        [Parameter(Mandatory = $true)]
+        [object[]]$SpecialistResults
+    )
+
+    $plan = Get-ContextOrchestrationPlan -Context $Context
+    $allowOpenAiModerator = $true
+    if ($null -ne $plan.PSObject.Properties['allow_openai_moderator']) {
+        $allowOpenAiModerator = [bool]$plan.allow_openai_moderator
+    }
+
+    if (-not $allowOpenAiModerator) {
+        return $false
+    }
+
+    $verificationSafety = Get-VerificationSafety -Verification $Verification
+    $specialistStats = Get-SpecialistExecutionStats -SpecialistResults $SpecialistResults
+    $allFindings = @()
+    foreach ($specialist in $SpecialistResults) {
+        $allFindings += @($specialist.findings)
+    }
+
+    return (
+        $allFindings.Count -gt 0 -or
+        $specialistStats.failed -gt 0 -or
+        $verificationSafety.failed -or
+        $verificationSafety.unsafe_skip
+    )
+}
+
 function Get-DeterministicMergedResult {
     param(
         [Parameter(Mandatory = $true)]
@@ -327,6 +380,12 @@ function Write-OrchestrationMarkdown {
     if (-not [string]::IsNullOrWhiteSpace([string]$MergedReview.moderator_fallback_reason)) {
         $lines.Add("- Moderator fallback reason: $($MergedReview.moderator_fallback_reason)")
     }
+    if ($null -ne $Context.PSObject.Properties['orchestration_plan']) {
+        $plan = $Context.orchestration_plan
+        $lines.Add("- Orchestration mode: $($plan.mode)")
+        $lines.Add("- Specialist plan: dx12 $($plan.run_dx12_specialist) / regression $($plan.run_regression_specialist)")
+        $lines.Add("- Moderator policy: $($plan.moderator_policy)")
+    }
     $specialistStats = Get-SpecialistExecutionStats -SpecialistResults $SpecialistResults
     $lines.Add("- Specialist execution: completed $($specialistStats.completed) / skipped $($specialistStats.skipped) / failed $($specialistStats.failed)")
     $lines.Add("- Finding counts: blocker $blockerCount / major $majorCount / minor $minorCount / suggestion $suggestionCount")
@@ -420,7 +479,8 @@ try {
     }
 
     $mergedReview = $null
-    if (-not [string]::IsNullOrWhiteSpace([string]$env:OPENAI_API_KEY)) {
+    $shouldUseOpenAiModerator = Test-ShouldUseOpenAiModerator -Context $context -Verification $verification -SpecialistResults $specialistResults
+    if (-not [string]::IsNullOrWhiteSpace([string]$env:OPENAI_API_KEY) -and $shouldUseOpenAiModerator) {
         try {
             $reviewerPayload = $specialistResults | ConvertTo-Json -Depth 100
             $verificationPayload = $verification | ConvertTo-Json -Depth 100
@@ -530,6 +590,13 @@ try {
                 -ModeratorMode 'deterministic_fallback' `
                 -ModeratorFallbackReason $fallbackReason
         }
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace([string]$env:OPENAI_API_KEY)) {
+        $mergedReview = Get-DeterministicMergedResult `
+            -Verification $verification `
+            -SpecialistResults $specialistResults `
+            -ModeratorMode 'deterministic_conditional_skip' `
+            -ModeratorFallbackReason 'OpenAI moderator skipped by conditional orchestration policy'
     }
     else {
         $mergedReview = Get-DeterministicMergedResult `

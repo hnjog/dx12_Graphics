@@ -449,3 +449,64 @@ function Get-OrchestrationScopeTags {
 
     return @($tags | Sort-Object)
 }
+
+function Get-OrchestrationExecutionPlan {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$ScopeTags,
+        [Parameter(Mandatory = $true)]
+        [int]$ChangedFileCount,
+        [bool]$DiffWasTruncated = $false
+    )
+
+    $tags = @($ScopeTags)
+    $isContextFailed = $tags -contains 'context_collection_failed'
+    $isDocsOnly = $tags -contains 'docs_only'
+    $hasNoDiff = $tags -contains 'no_diff'
+    $hasCode = $tags -contains 'code'
+    $hasAutomation = $tags -contains 'automation'
+    $hasDx12Risk = $tags -contains 'dx12_high_risk'
+    $shouldReview = -not $isContextFailed -and -not $isDocsOnly -and -not $hasNoDiff -and $ChangedFileCount -gt 0
+
+    $runDx12Specialist = $shouldReview -and ($hasDx12Risk -or $hasCode)
+    $runRegressionSpecialist = $shouldReview
+    $allowOpenAiModerator = $shouldReview -and ($runDx12Specialist -or $runRegressionSpecialist)
+
+    $reasons = New-Object System.Collections.Generic.List[string]
+    if ($isContextFailed) {
+        $reasons.Add('context_collection_failed') | Out-Null
+    }
+    elseif ($isDocsOnly) {
+        $reasons.Add('docs_only') | Out-Null
+    }
+    elseif ($hasNoDiff -or $ChangedFileCount -eq 0) {
+        $reasons.Add('no_diff') | Out-Null
+    }
+    else {
+        if ($hasDx12Risk) {
+            $reasons.Add('dx12_high_risk') | Out-Null
+        }
+        if ($hasCode) {
+            $reasons.Add('code_change') | Out-Null
+        }
+        if ($hasAutomation) {
+            $reasons.Add('automation_change') | Out-Null
+        }
+        if ($DiffWasTruncated) {
+            $reasons.Add('partial_diff') | Out-Null
+        }
+    }
+
+    if ($reasons.Count -eq 0) {
+        $reasons.Add('low_risk_change') | Out-Null
+    }
+
+    return [pscustomobject]@{
+        mode                         = 'conditional'
+        run_dx12_specialist          = [bool]$runDx12Specialist
+        run_regression_specialist    = [bool]$runRegressionSpecialist
+        allow_openai_moderator       = [bool]$allowOpenAiModerator
+        moderator_policy             = 'only_for_findings_or_untrusted_verification'
+        reason                       = ($reasons -join ',')
+    }
+}
