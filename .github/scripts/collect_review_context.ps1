@@ -117,7 +117,7 @@ try {
 
         $changedFilesForPrompt = @($filePlans.path | Select-Object -First 80)
         if ($changedFiles.Count -gt $changedFilesForPrompt.Count) {
-            $changedFilesNote = "Changed files list was sorted by review priority and truncated to the first $($changedFilesForPrompt.Count) entries."
+            $changedFilesNote = "Changed files list was sorted by review priority and truncated to the first $($changedFilesForPrompt.Count) of $($changedFiles.Count) entries. Diff text is bounded separately using the same priority order."
         }
     }
     else {
@@ -133,7 +133,7 @@ try {
         pr_url                   = $prUrl
         compare_range            = if ($changedFiles.Count -gt 0) { $compareRange } else { '' }
         merge_base               = [string]$mergeBase
-        changed_files            = $changedFiles
+        changed_files            = $changedFilesForPrompt
         changed_files_note       = $changedFilesNote
         scope_tags               = $scopeTags
         is_docs_only             = [bool]($scopeTags -contains 'docs_only')
