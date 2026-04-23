@@ -119,11 +119,17 @@ function Apply-FinalDecisionGuard {
         [Parameter(Mandatory = $true)]
         [object]$Verification,
         [Parameter(Mandatory = $true)]
-        [object[]]$SpecialistResults
+        [object[]]$SpecialistResults,
+        [Parameter(Mandatory = $true)]
+        [object]$Context
     )
 
     $verificationSafety = Get-VerificationSafety -Verification $Verification
     $specialistStats = Get-SpecialistExecutionStats -SpecialistResults $SpecialistResults
+    $isDocsOnlySafeSkip = @($Context.scope_tags) -contains 'docs_only' -and
+        [string]$Verification.verification_status -eq 'skipped' -and
+        $verificationSafety.skip_is_safe -and
+        $specialistStats.completed -eq 0
     $guardReason = ''
     $targetDecision = ''
 
@@ -139,7 +145,7 @@ function Apply-FinalDecisionGuard {
         $guardReason = 'specialist_review_failed'
         $targetDecision = 'needs_human'
     }
-    elseif ($specialistStats.completed -eq 0) {
+    elseif ($specialistStats.completed -eq 0 -and -not $isDocsOnlySafeSkip) {
         $guardReason = 'specialist_reviews_unavailable'
         $targetDecision = 'needs_human'
     }
@@ -507,7 +513,7 @@ try {
         $mergedReview = Get-DeterministicMergedResult -Verification $verification -SpecialistResults $specialistResults
     }
 
-    $mergedReview = Apply-FinalDecisionGuard -MergedReview $mergedReview -Verification $verification -SpecialistResults $specialistResults
+    $mergedReview = Apply-FinalDecisionGuard -MergedReview $mergedReview -Verification $verification -SpecialistResults $specialistResults -Context $context
 
     Write-OrchestrationMarkdown -Path $commentPath -Context $context -MergedReview $mergedReview -SpecialistResults $specialistResults -Verification $verification
     Write-OrchestrationMarkdown -Path $summaryPath -Context $context -MergedReview $mergedReview -SpecialistResults $specialistResults -Verification $verification
