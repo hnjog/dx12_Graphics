@@ -73,14 +73,19 @@ try {
 
     $baseRemoteRef = "origin/$baseRef"
     $fetchRefSpec = "+refs/heads/{0}:refs/remotes/origin/{0}" -f $baseRef
-    $null = git fetch --no-tags origin $fetchRefSpec
-    if ($LASTEXITCODE -ne 0) {
-        if (Test-GitRef -Ref $baseRemoteRef) {
-            Add-DiffNote -Note "Failed to refresh $baseRemoteRef, so the existing local remote ref was used."
+    $fetchOutput = git fetch --no-tags origin $fetchRefSpec 2>&1
+    $fetchExitCode = $LASTEXITCODE
+    if ($fetchExitCode -ne 0) {
+        $fetchDetail = ([string](@($fetchOutput) -join "`n")).Trim()
+        if ([string]::IsNullOrWhiteSpace($fetchDetail)) {
+            $fetchDetail = "git fetch exited with code $fetchExitCode."
         }
-        else {
-            throw "Failed to fetch $baseRemoteRef for orchestration context."
-        }
+
+        throw "Failed to refresh $baseRemoteRef for orchestration context. Stale local refs are not reused. $fetchDetail"
+    }
+
+    if (-not (Test-GitRef -Ref $baseRemoteRef)) {
+        throw "Fetched base ref $baseRemoteRef could not be verified for orchestration context."
     }
 
     $mergeBaseOutput = git merge-base HEAD $baseRemoteRef

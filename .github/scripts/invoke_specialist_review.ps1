@@ -83,6 +83,32 @@ Return at most 4 findings.
 try {
     $context = Read-JsonUtf8 -Path $reviewContextPath
 
+    if (@($context.scope_tags) -contains 'context_collection_failed') {
+        $collectionError = ''
+        if ($null -ne $context.PSObject.Properties['collection_error']) {
+            $collectionError = [string]$context.collection_error
+        }
+
+        $summary = '리뷰 컨텍스트 수집에 실패하여 전문 리뷰를 신뢰할 수 없습니다.'
+        if (-not [string]::IsNullOrWhiteSpace($collectionError)) {
+            $summary = "$summary 원인: $collectionError"
+        }
+
+        $result = New-SpecialistResult `
+            -Reviewer $reviewer `
+            -Summary $summary `
+            -RiskLevel 'unknown' `
+            -Findings @() `
+            -ShouldEscalate $true `
+            -EscalationReason 'context_collection_failed' `
+            -Status 'failed'
+
+        Write-JsonUtf8 -Path $resultPath -Value $result
+        Set-WorkflowOutput -Name 'result_path' -Value $resultPath
+        Set-WorkflowOutput -Name 'review_status' -Value 'failed'
+        exit 0
+    }
+
     if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) {
         $result = New-SpecialistResult `
             -Reviewer $reviewer `
