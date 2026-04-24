@@ -111,12 +111,14 @@ try {
     $filePlans = Get-ReviewFilePlan -Paths $changedFiles
     $diffText = ''
     $changedFilesNote = ''
+    $diffWasTruncated = $false
 
     if ($changedFiles.Count -gt 0) {
         $diffBundle = Get-BoundedDiffByFile -CompareRange $compareRange -FilePlans $filePlans -MaxLength 55000
         $diffText = [string]$diffBundle.text
 
         if ($diffBundle.remaining_file_count -gt 0) {
+            $diffWasTruncated = $true
             Add-DiffNote -Note "오케스트레이션 입력 길이를 제한하기 위해 중요도가 높은 파일 순으로 diff를 구성했습니다. 포함 파일 수: $($diffBundle.included_file_count), 제외 파일 수: $($diffBundle.remaining_file_count), 마지막 절단 파일: $($diffBundle.truncated_file_path). 제외된 파일이 있으므로 specialist review는 부분 diff 기반 결과로 해석해야 합니다."
         }
 
@@ -128,6 +130,11 @@ try {
     else {
         $changedFilesForPrompt = @()
     }
+
+    $orchestrationPlan = Get-OrchestrationExecutionPlan `
+        -ScopeTags $scopeTags `
+        -ChangedFileCount $changedFiles.Count `
+        -DiffWasTruncated $diffWasTruncated
 
     $context = [pscustomobject]@{
         repository               = [string]$env:GITHUB_REPOSITORY
@@ -142,6 +149,8 @@ try {
         changed_files_note       = $changedFilesNote
         scope_tags               = $scopeTags
         is_docs_only             = [bool]($scopeTags -contains 'docs_only')
+        diff_was_truncated       = [bool]$diffWasTruncated
+        orchestration_plan       = $orchestrationPlan
         diff_text                = $diffText
         diff_note                = $diffNote
         review_rules_excerpt     = Get-BoundedText -Text $reviewRules -MaxLength 4500 -Label 'review rules'
@@ -156,8 +165,16 @@ try {
     Set-WorkflowOutput -Name 'changed_file_count' -Value ([string]$changedFiles.Count)
     Set-WorkflowOutput -Name 'docs_only' -Value ($context.is_docs_only.ToString().ToLowerInvariant())
     Set-WorkflowOutput -Name 'scope_tags' -Value (($scopeTags -join ','))
+    Set-WorkflowOutput -Name 'orchestration_mode' -Value ([string]$orchestrationPlan.mode)
+    Set-WorkflowOutput -Name 'run_dx12_specialist' -Value ($orchestrationPlan.run_dx12_specialist.ToString().ToLowerInvariant())
+    Set-WorkflowOutput -Name 'run_regression_specialist' -Value ($orchestrationPlan.run_regression_specialist.ToString().ToLowerInvariant())
+    Set-WorkflowOutput -Name 'allow_openai_moderator' -Value ($orchestrationPlan.allow_openai_moderator.ToString().ToLowerInvariant())
 }
 catch {
+    $orchestrationPlan = Get-OrchestrationExecutionPlan `
+        -ScopeTags @('context_collection_failed') `
+        -ChangedFileCount 0
+
     $context = [pscustomobject]@{
         repository               = [string]$env:GITHUB_REPOSITORY
         base_ref                 = $baseRef
@@ -171,6 +188,8 @@ catch {
         changed_files_note       = ''
         scope_tags               = @('context_collection_failed')
         is_docs_only             = $false
+        diff_was_truncated       = $false
+        orchestration_plan       = $orchestrationPlan
         diff_text                = ''
         diff_note                = ''
         review_rules_excerpt     = ''
@@ -186,4 +205,8 @@ catch {
     Set-WorkflowOutput -Name 'changed_file_count' -Value '0'
     Set-WorkflowOutput -Name 'docs_only' -Value 'false'
     Set-WorkflowOutput -Name 'scope_tags' -Value 'context_collection_failed'
+    Set-WorkflowOutput -Name 'orchestration_mode' -Value ([string]$orchestrationPlan.mode)
+    Set-WorkflowOutput -Name 'run_dx12_specialist' -Value 'false'
+    Set-WorkflowOutput -Name 'run_regression_specialist' -Value 'false'
+    Set-WorkflowOutput -Name 'allow_openai_moderator' -Value 'false'
 }

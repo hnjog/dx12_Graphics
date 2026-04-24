@@ -80,6 +80,35 @@ Return at most 4 findings.
     }
 }
 
+function Test-SpecialistEnabled {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Context,
+        [Parameter(Mandatory = $true)]
+        [string]$Reviewer
+    )
+
+    if ($null -eq $Context.PSObject.Properties['orchestration_plan']) {
+        return $true
+    }
+
+    $plan = $Context.orchestration_plan
+    switch ($Reviewer) {
+        'dx12_lifetime_sync' {
+            if ($null -ne $plan.PSObject.Properties['run_dx12_specialist']) {
+                return [bool]$plan.run_dx12_specialist
+            }
+        }
+        'regression_testing' {
+            if ($null -ne $plan.PSObject.Properties['run_regression_specialist']) {
+                return [bool]$plan.run_regression_specialist
+            }
+        }
+    }
+
+    return $true
+}
+
 try {
     $context = Read-JsonUtf8 -Path $reviewContextPath
 
@@ -133,6 +162,30 @@ try {
             -Findings @() `
             -ShouldEscalate $false `
             -EscalationReason 'docs_only' `
+            -Status 'skipped'
+
+        Write-JsonUtf8 -Path $resultPath -Value $result
+        Set-WorkflowOutput -Name 'result_path' -Value $resultPath
+        Set-WorkflowOutput -Name 'review_status' -Value 'skipped'
+        exit 0
+    }
+
+    if (-not (Test-SpecialistEnabled -Context $context -Reviewer $reviewer)) {
+        $planReason = ''
+        if (
+            $null -ne $context.PSObject.Properties['orchestration_plan'] -and
+            $null -ne $context.orchestration_plan.PSObject.Properties['reason']
+        ) {
+            $planReason = [string]$context.orchestration_plan.reason
+        }
+
+        $result = New-SpecialistResult `
+            -Reviewer $reviewer `
+            -Summary "조건부 오케스트레이션 계획에 따라 $reviewer 호출을 생략했습니다." `
+            -RiskLevel 'low' `
+            -Findings @() `
+            -ShouldEscalate $false `
+            -EscalationReason "conditional_orchestration_skip:$planReason" `
             -Status 'skipped'
 
         Write-JsonUtf8 -Path $resultPath -Value $result
