@@ -53,6 +53,7 @@ function New-MergedReviewResult {
 function Get-UniqueFindings {
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [object[]]$Findings
     )
 
@@ -214,6 +215,13 @@ function Test-ShouldUseOpenAiModerator {
     )
 
     $plan = Get-ContextOrchestrationPlan -Context $Context
+    $verificationSafety = Get-VerificationSafety -Verification $Verification
+    $specialistStats = Get-SpecialistExecutionStats -SpecialistResults $SpecialistResults
+
+    if ($specialistStats.failed -gt 0 -or $verificationSafety.failed -or $verificationSafety.unsafe_skip) {
+        return $true
+    }
+
     $allowOpenAiModerator = $true
     if ($null -ne $plan.PSObject.Properties['allow_openai_moderator']) {
         $allowOpenAiModerator = [bool]$plan.allow_openai_moderator
@@ -223,18 +231,13 @@ function Test-ShouldUseOpenAiModerator {
         return $false
     }
 
-    $verificationSafety = Get-VerificationSafety -Verification $Verification
-    $specialistStats = Get-SpecialistExecutionStats -SpecialistResults $SpecialistResults
     $allFindings = @()
     foreach ($specialist in $SpecialistResults) {
         $allFindings += @($specialist.findings)
     }
 
     return (
-        $allFindings.Count -gt 0 -or
-        $specialistStats.failed -gt 0 -or
-        $verificationSafety.failed -or
-        $verificationSafety.unsafe_skip
+        $allFindings.Count -gt 0
     )
 }
 
