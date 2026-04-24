@@ -222,6 +222,21 @@ function Test-ShouldUseOpenAiModerator {
         return $true
     }
 
+    $hasPartialDiff = $false
+    if ($null -ne $Context.PSObject.Properties['diff_was_truncated']) {
+        $hasPartialDiff = [bool]$Context.diff_was_truncated
+    }
+    elseif (
+        $null -ne $plan.PSObject.Properties['reason'] -and
+        ([string]$plan.reason -split ',') -contains 'partial_diff'
+    ) {
+        $hasPartialDiff = $true
+    }
+
+    if ($hasPartialDiff) {
+        return $true
+    }
+
     $allowOpenAiModerator = $true
     if ($null -ne $plan.PSObject.Properties['allow_openai_moderator']) {
         $allowOpenAiModerator = [bool]$plan.allow_openai_moderator

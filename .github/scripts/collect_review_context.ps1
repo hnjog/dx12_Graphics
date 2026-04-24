@@ -149,6 +149,7 @@ try {
         changed_files_note       = $changedFilesNote
         scope_tags               = $scopeTags
         is_docs_only             = [bool]($scopeTags -contains 'docs_only')
+        diff_was_truncated       = [bool]$diffWasTruncated
         orchestration_plan       = $orchestrationPlan
         diff_text                = $diffText
         diff_note                = $diffNote
@@ -187,6 +188,7 @@ catch {
         changed_files_note       = ''
         scope_tags               = @('context_collection_failed')
         is_docs_only             = $false
+        diff_was_truncated       = $false
         orchestration_plan       = $orchestrationPlan
         diff_text                = ''
         diff_note                = ''

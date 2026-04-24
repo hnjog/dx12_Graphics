@@ -470,7 +470,7 @@ function Get-OrchestrationExecutionPlan {
 
     $runDx12Specialist = $shouldReview -and ($hasDx12Risk -or $hasCode)
     $runRegressionSpecialist = $shouldReview
-    $allowOpenAiModerator = $shouldReview -and ($runDx12Specialist -or $runRegressionSpecialist)
+    $allowOpenAiModerator = $shouldReview -and ($runDx12Specialist -or $runRegressionSpecialist -or $DiffWasTruncated)
 
     $reasons = New-Object System.Collections.Generic.List[string]
     if ($isContextFailed) {
@@ -506,7 +506,7 @@ function Get-OrchestrationExecutionPlan {
         run_dx12_specialist          = [bool]$runDx12Specialist
         run_regression_specialist    = [bool]$runRegressionSpecialist
         allow_openai_moderator       = [bool]$allowOpenAiModerator
-        moderator_policy             = 'only_for_findings_or_untrusted_verification'
+        moderator_policy             = 'for_partial_diff_or_findings_or_untrusted_verification'
         reason                       = ($reasons -join ',')
     }
 }
