@@ -35,7 +35,7 @@
 
 ## 설계
 
-![dx12_Graphics AI workflow overview](docs/images/ai_workflow_overview.svg)
+![dx12_Graphics AI workflow overview](docs/images/ai_workflow_overview.png)
 
 - FigJam 구조도: [dx12_Graphics AI 작업 구조 전체 흐름](https://www.figma.com/board/2N1pKMPbwboAngw6wIbGxO?utm_source=other&utm_content=edit_in_figjam&oai_id=&request_id=a2a233f1-fd0c-447c-a612-3fdaa920f3da)
 - 핵심 흐름
