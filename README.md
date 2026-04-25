@@ -1,62 +1,121 @@
 # dx12_Graphics
 
-`dx12_Graphics`는 `dx12Engine` 프로젝트를 중심으로 구성되는 DirectX 12 기반 그래픽스 엔진 및 테스트 작업 공간입니다.
-이 저장소의 목표는 안정적인 엔진 기반을 만들고, 실용적인 테스트 환경을 준비하며, 이후에는 AI 기반 코드 리뷰와 Slack 알림 흐름까지 개발 프로세스에 연결하는 것입니다.
+`dx12_Graphics`는 `dx12Engine` 프로젝트를 중심으로 구성한 DirectX 12 기반 그래픽스 작업 공간입니다.
 
-## 목표
+지금 저장소는 단순한 엔진 초기화 실험에 그치지 않고, 아래 두 축을 함께 다루고 있습니다.
 
-- DirectX 12 기반 그래픽스 엔진 구조를 구축합니다.
-- 렌더링 기능과 엔진 동작을 검증할 수 있는 테스트 환경을 준비합니다.
-- AI 기반 코드 리뷰 워크플로우를 정립합니다.
-- 리뷰 결과와 프로젝트 상태를 Slack으로 공유할 수 있는 기반을 마련합니다.
+- DirectX 12 기반 엔진/테스트 작업 공간 정리
+- GitHub Actions 기반 AI 코드 리뷰와 AI 오케스트레이션 자동화
 
-## 현재 범위
+## 현재 상황
 
-현재 저장소는 다음 영역을 중심으로 구성됩니다.
+- `dx12Engine` 솔루션을 기준으로 엔진 작업 공간을 유지하고 있습니다.
+- 기존 `AI Review` workflow가 PR 기준으로 동작합니다.
+- 별도 `AI Orchestration MVP` workflow가 병행 실행됩니다.
+- 조건부 specialist / moderator 실행을 도입해 오케스트레이션 비용을 최적화했습니다.
+- 성공 run 기준 오케스트레이션 비용은 약 `$0.03` 수준이며, 기존 `$0.07 ~ $0.08` 대비 크게 낮아졌습니다.
+- 기본 브랜치 흐름은 `feature/* -> develop -> main` 입니다.
 
-- `dx12Engine` 프로젝트 기반 엔진 개발
-- 테스트 및 샘플 실행 환경 구성
-- 코딩 규칙과 리뷰 규칙 정리
-- 향후 협업 및 자동화 워크플로우 확장
+| 항목 | 상태 |
+| --- | --- |
+| DX12 엔진 작업 공간 | 진행 중 |
+| AI Review 자동화 | 운영 중 |
+| AI Orchestration MVP | 운영 중 |
+| 조건부 실행 비용 최적화 | 적용 완료 |
+| Slack 알림 | 운영 중 |
+| 대표 검증 기준 | PR / Build / Comment / Slack |
 
-## 개발 방향
+## AI 작업 구조
 
-이 프로젝트는 아직 초기 구축 단계에 있습니다.
-기능 수를 빠르게 늘리기보다, 현재는 다음 기반을 깔끔하고 유지보수 가능하게 정리하는 것을 우선합니다.
+현재 AI 작업 구조는 `기존 AI 리뷰`와 `조건부 AI 오케스트레이션`이 함께 동작하는 형태입니다.
 
-- 프로젝트 구조
-- 리소스 수명 관리 원칙
-- 코딩 규칙
-- 코드 리뷰 규칙
-- 테스트 전략
-- 협업 및 자동화 방향
+- 기존 AI Review는 빠른 1차 리뷰와 Slack 알림 역할을 담당합니다.
+- AI Orchestration은 context 수집, 조건부 실행 계획, specialist review, moderator merge, verification gate를 담당합니다.
+- partial diff나 verification 이상 상황에서는 비용 절감보다 안전성을 우선합니다.
 
-## 예정된 작업 흐름
+## 설계
 
-1. 기능 또는 구조 변경을 진행합니다.
-2. 항상 빌드 가능한 상태를 유지합니다.
-3. AI와 사람이 함께 변경 사항을 리뷰합니다.
-4. 필요 시 주요 리뷰 결과를 Slack으로 공유합니다.
+![dx12_Graphics AI workflow overview](docs/images/ai_workflow_overview.svg)
+
+- FigJam 구조도: [dx12_Graphics AI 작업 구조 전체 흐름](https://www.figma.com/board/2N1pKMPbwboAngw6wIbGxO?utm_source=other&utm_content=edit_in_figjam&oai_id=&request_id=a2a233f1-fd0c-447c-a612-3fdaa920f3da)
+- 핵심 흐름
+  - `feature` 작업 후 `develop` 대상 PR 생성
+  - 기존 `AI Review`와 `AI Orchestration` 병행 실행
+  - 오케스트레이션은 변경 범위에 따라 specialist / moderator 호출을 조절
+  - verification 결과와 함께 PR comment, Slack, 운영 기록으로 결과 정리
+
+## 저장소 구조
+
+```text
+dx12_Graphics/
+├─ dx12Engine/
+│  └─ dx12Engine/
+├─ docs/
+│  ├─ architecture.md
+│  ├─ coding-standard.md
+│  ├─ commit-message.md
+│  ├─ review-rules.md
+│  ├─ testing-strategy.md
+│  ├─ ai-collaboration-workflow.md
+│  ├─ ai-review-workflow.md
+│  ├─ ai-review-troubleshooting.md
+│  └─ ai-usage-evidence.md
+├─ .github/
+│  ├─ workflows/
+│  │  ├─ ai_review.yml
+│  │  └─ ai_orchestrator_mvp.yml
+│  ├─ scripts/
+│  │  ├─ collect_review_context.ps1
+│  │  ├─ invoke_ai_review.ps1
+│  │  ├─ invoke_specialist_review.ps1
+│  │  ├─ merge_review_findings.ps1
+│  │  ├─ run_verification.ps1
+│  │  ├─ send_slack_review.ps1
+│  │  └─ send_slack_orchestration.ps1
+│  └─ pull_request_template.md
+└─ README.md
+```
 
 ## 관련 문서
 
-저장소는 향후 다음과 같은 문서를 기준으로 운영할 예정입니다.
+- [Architecture](docs/architecture.md)
+- [Coding Standard](docs/coding-standard.md)
+- [Commit Message Guide](docs/commit-message.md)
+- [Review Rules](docs/review-rules.md)
+- [Testing Strategy](docs/testing-strategy.md)
+- [AI Collaboration Workflow](docs/ai-collaboration-workflow.md)
+- [AI Review Workflow](docs/ai-review-workflow.md)
+- [AI Review Troubleshooting](docs/ai-review-troubleshooting.md)
+- [AI Usage Evidence](docs/ai-usage-evidence.md)
+- [Contributing](CONTRIBUTING.md)
 
-- `docs/coding-standard.md`
-- `docs/review-rules.md`
-- `docs/commit-message.md`
-- `docs/architecture.md`
-- `docs/testing-strategy.md`
-- `docs/ai-collaboration-workflow.md`
-- `docs/ai-review-workflow.md`
-- `docs/ai-usage-evidence.md`
-- `CONTRIBUTING.md`
-- `.github/pull_request_template.md`
+## 현재까지 정리된 AI 방향
 
-## 로드맵
+### 1. 기존 AI Review
 
-- DirectX 12 프로젝트 구조 정리
-- 렌더링 테스트 환경 준비
-- 엔진 코딩 규칙 확정
-- AI 기반 리뷰 규칙 확정
-- Slack 알림 워크플로우 연동
+- 변경 diff를 기반으로 빠르게 1차 리뷰를 수행합니다.
+- PR comment와 Slack 알림으로 결과를 남깁니다.
+- 비교적 짧은 실행 시간과 단순한 흐름이 장점입니다.
+
+### 2. AI Orchestration MVP
+
+- context 수집
+- 조건부 실행 계획 계산
+- DX12 specialist / regression specialist 실행
+- OpenAI moderator 또는 deterministic merge
+- Debug / Release x64 verification
+- PR comment / Slack / 운영 기록 정리
+
+### 3. 조건부 실행 비용 최적화
+
+- 모든 PR에서 모든 specialist와 moderator를 항상 호출하지 않습니다.
+- 변경 성격에 따라 DX12 specialist를 skip할 수 있습니다.
+- findings, verification 이상, partial diff가 있을 때만 moderator를 적극 호출합니다.
+- 성공 run 기준 비용은 약 `$0.03` 수준까지 낮아졌습니다.
+
+## 다음 초점
+
+- representative PR 유형별 검증 케이스 축적
+- human gate 판단 기준 정리
+- DX12 / mesh shader 작업 재개
+- AI 오케스트레이션 운영 기준 고도화
