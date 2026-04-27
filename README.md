@@ -30,7 +30,6 @@
 ### 실행 흐름 전체 요약
 
 ![dx12_Graphics AI orchestration execution flow](docs/images/ai_stack_overview.png)
-
 | 영역 | 사용 기술 / 도구 | 역할 |
 | --- | --- | --- |
 | 엔진 / 그래픽스 | `DirectX 12`, `C++`, `Visual Studio` | DX12 기반 엔진 작업 공간 |

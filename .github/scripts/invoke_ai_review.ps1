@@ -305,6 +305,48 @@ function Get-BoundedText {
     return $Text.Substring(0, $MaxLength) + "`n`n[Truncated $Label to first $MaxLength characters.]"
 }
 
+function Protect-SensitiveText {
+    param(
+        [AllowEmptyString()]
+        [string]$Text
+    )
+
+    $value = [string]$Text
+    if ([string]::IsNullOrEmpty($value)) {
+        return [pscustomobject]@{
+            text                  = $value
+            has_sensitive_content = $false
+            labels                = @()
+        }
+    }
+
+    $labels = New-Object System.Collections.Generic.List[string]
+    $rules = @(
+        @{ Pattern = 'https://hooks\.slack(?:-gov)?\.com/services/[A-Za-z0-9/_-]+'; Replacement = '[REDACTED_SLACK_WEBHOOK]'; Label = 'slack_webhook'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
+        @{ Pattern = '\bsk-[A-Za-z0-9][A-Za-z0-9_-]{12,}\b'; Replacement = '[REDACTED_OPENAI_KEY]'; Label = 'openai_key'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
+        @{ Pattern = '\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b'; Replacement = '[REDACTED_GITHUB_TOKEN]'; Label = 'github_token'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
+        @{ Pattern = '\bxox[baprs]-[A-Za-z0-9-]{10,}\b'; Replacement = '[REDACTED_SLACK_TOKEN]'; Label = 'slack_token'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
+        @{ Pattern = '\bAKIA[0-9A-Z]{16}\b'; Replacement = '[REDACTED_AWS_ACCESS_KEY]'; Label = 'aws_access_key'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
+        @{ Pattern = '\bBearer\s+[A-Za-z0-9._~+/\-=]{10,}\b'; Replacement = 'Bearer [REDACTED_BEARER_TOKEN]'; Label = 'bearer_token'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
+        @{ Pattern = '(?s)-----BEGIN [A-Z ]+PRIVATE KEY-----.+?-----END [A-Z ]+PRIVATE KEY-----'; Replacement = '[REDACTED_PRIVATE_KEY]'; Label = 'private_key'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
+        @{ Pattern = '(?im)\b(password|passwd|pwd|token|secret|api[_-]?key|access[_-]?key)\b(\s*[:=]\s*)([^\r\n]+)'; Replacement = '$1$2[REDACTED_CREDENTIAL]'; Label = 'inline_credential'; Options = ([System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Multiline) }
+    )
+
+    foreach ($rule in $rules) {
+        $regex = [regex]::new([string]$rule.Pattern, [System.Text.RegularExpressions.RegexOptions]$rule.Options)
+        if ($regex.IsMatch($value)) {
+            $labels.Add([string]$rule.Label) | Out-Null
+            $value = $regex.Replace($value, [string]$rule.Replacement)
+        }
+    }
+
+    return [pscustomobject]@{
+        text                  = $value
+        has_sensitive_content = ($labels.Count -gt 0)
+        labels                = @($labels | Select-Object -Unique)
+    }
+}
+
 function Get-ReviewFilePlan {
     param(
         [Parameter(Mandatory = $true)]
@@ -640,6 +682,37 @@ try {
     $changedFilesNote = ''
     if ($changedFiles.Count -gt $changedFilesForPrompt.Count) {
         $changedFilesNote = "Changed files list was sorted by review priority and truncated to the first $($changedFilesForPrompt.Count) entries."
+    }
+
+    $maskedFragments = @(
+        Protect-SensitiveText -Text $prTitle,
+        Protect-SensitiveText -Text $prBodyForPrompt,
+        Protect-SensitiveText -Text $diffText,
+        Protect-SensitiveText -Text $reviewRulesForPrompt,
+        Protect-SensitiveText -Text $testingStrategyForPrompt
+    )
+
+    $prTitle = [string]$maskedFragments[0].text
+    $prBodyForPrompt = [string]$maskedFragments[1].text
+    $diffText = [string]$maskedFragments[2].text
+    $reviewRulesForPrompt = [string]$maskedFragments[3].text
+    $testingStrategyForPrompt = [string]$maskedFragments[4].text
+
+    $maskedLabels = @()
+    foreach ($fragment in $maskedFragments) {
+        if ($fragment.has_sensitive_content) {
+            $maskedLabels += @($fragment.labels)
+        }
+    }
+
+    if ($maskedLabels.Count -gt 0) {
+        $maskedLabels = @($maskedLabels | Select-Object -Unique)
+        if ([string]::IsNullOrWhiteSpace($diffNote)) {
+            $diffNote = "Potential sensitive strings were masked before PR content was sent to AI review. Categories: $($maskedLabels -join ', ')."
+        }
+        else {
+            $diffNote = "$diffNote`nPotential sensitive strings were masked before PR content was sent to AI review. Categories: $($maskedLabels -join ', ')."
+        }
     }
 
     $instructions = @"

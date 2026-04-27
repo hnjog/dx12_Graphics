@@ -112,6 +112,8 @@ try {
     $diffText = ''
     $changedFilesNote = ''
     $diffWasTruncated = $false
+    $maskedContentTypes = @()
+    $sensitiveContentMasked = $false
 
     if ($changedFiles.Count -gt 0) {
         $diffBundle = Get-BoundedDiffByFile -CompareRange $compareRange -FilePlans $filePlans -MaxLength 55000
@@ -129,6 +131,38 @@ try {
     }
     else {
         $changedFilesForPrompt = @()
+    }
+
+    $maskedFragments = @(
+        Protect-SensitiveText -Text $prTitle,
+        Protect-SensitiveText -Text $prBody,
+        Protect-SensitiveText -Text $diffText,
+        Protect-SensitiveText -Text (Get-BoundedText -Text $reviewRules -MaxLength 4500 -Label 'review rules'),
+        Protect-SensitiveText -Text (Get-BoundedText -Text $testingStrategy -MaxLength 3500 -Label 'testing strategy'),
+        Protect-SensitiveText -Text (Get-BoundedText -Text $prTemplate -MaxLength 2000 -Label 'pull request template')
+    )
+
+    $prTitle = [string]$maskedFragments[0].text
+    $prBody = [string]$maskedFragments[1].text
+    $diffText = [string]$maskedFragments[2].text
+    $reviewRulesForPrompt = [string]$maskedFragments[3].text
+    $testingStrategyForPrompt = [string]$maskedFragments[4].text
+    $prTemplateForPrompt = [string]$maskedFragments[5].text
+
+    foreach ($fragment in $maskedFragments) {
+        if ($fragment.has_sensitive_content) {
+            $sensitiveContentMasked = $true
+            $maskedContentTypes += @($fragment.labels)
+        }
+    }
+
+    if ($sensitiveContentMasked) {
+        $maskedContentTypes = @($maskedContentTypes | Select-Object -Unique)
+        if ($scopeTags -notcontains 'sensitive_content_masked') {
+            $scopeTags += 'sensitive_content_masked'
+        }
+
+        Add-DiffNote -Note "Potential sensitive strings were masked before PR context was sent to AI reviewers. Categories: $($maskedContentTypes -join ', ')."
     }
 
     $orchestrationPlan = Get-OrchestrationExecutionPlan `
@@ -150,12 +184,14 @@ try {
         scope_tags               = $scopeTags
         is_docs_only             = [bool]($scopeTags -contains 'docs_only')
         diff_was_truncated       = [bool]$diffWasTruncated
+        sensitive_content_masked = [bool]$sensitiveContentMasked
+        masked_content_types     = $maskedContentTypes
         orchestration_plan       = $orchestrationPlan
         diff_text                = $diffText
         diff_note                = $diffNote
-        review_rules_excerpt     = Get-BoundedText -Text $reviewRules -MaxLength 4500 -Label 'review rules'
-        testing_strategy_excerpt = Get-BoundedText -Text $testingStrategy -MaxLength 3500 -Label 'testing strategy'
-        pr_template_excerpt      = Get-BoundedText -Text $prTemplate -MaxLength 2000 -Label 'pull request template'
+        review_rules_excerpt     = $reviewRulesForPrompt
+        testing_strategy_excerpt = $testingStrategyForPrompt
+        pr_template_excerpt      = $prTemplateForPrompt
     }
 
     Write-JsonUtf8 -Path $contextPath -Value $context
@@ -165,6 +201,7 @@ try {
     Set-WorkflowOutput -Name 'changed_file_count' -Value ([string]$changedFiles.Count)
     Set-WorkflowOutput -Name 'docs_only' -Value ($context.is_docs_only.ToString().ToLowerInvariant())
     Set-WorkflowOutput -Name 'scope_tags' -Value (($scopeTags -join ','))
+    Set-WorkflowOutput -Name 'sensitive_content_masked' -Value ($sensitiveContentMasked.ToString().ToLowerInvariant())
     Set-WorkflowOutput -Name 'orchestration_mode' -Value ([string]$orchestrationPlan.mode)
     Set-WorkflowOutput -Name 'run_dx12_specialist' -Value ($orchestrationPlan.run_dx12_specialist.ToString().ToLowerInvariant())
     Set-WorkflowOutput -Name 'run_regression_specialist' -Value ($orchestrationPlan.run_regression_specialist.ToString().ToLowerInvariant())
@@ -189,6 +226,8 @@ catch {
         scope_tags               = @('context_collection_failed')
         is_docs_only             = $false
         diff_was_truncated       = $false
+        sensitive_content_masked = $false
+        masked_content_types     = @()
         orchestration_plan       = $orchestrationPlan
         diff_text                = ''
         diff_note                = ''
@@ -205,6 +244,7 @@ catch {
     Set-WorkflowOutput -Name 'changed_file_count' -Value '0'
     Set-WorkflowOutput -Name 'docs_only' -Value 'false'
     Set-WorkflowOutput -Name 'scope_tags' -Value 'context_collection_failed'
+    Set-WorkflowOutput -Name 'sensitive_content_masked' -Value 'false'
     Set-WorkflowOutput -Name 'orchestration_mode' -Value ([string]$orchestrationPlan.mode)
     Set-WorkflowOutput -Name 'run_dx12_specialist' -Value 'false'
     Set-WorkflowOutput -Name 'run_regression_specialist' -Value 'false'
