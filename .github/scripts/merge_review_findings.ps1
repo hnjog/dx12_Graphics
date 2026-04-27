@@ -404,6 +404,13 @@ function Write-OrchestrationMarkdown {
         $lines.Add("- Specialist plan: dx12 $($plan.run_dx12_specialist) / regression $($plan.run_regression_specialist)")
         $lines.Add("- Moderator policy: $($plan.moderator_policy)")
     }
+    if ($null -ne $Context.PSObject.Properties['sensitive_content_masked'] -and [bool]$Context.sensitive_content_masked) {
+        $maskedTypesLabel = ''
+        if ($null -ne $Context.PSObject.Properties['masked_content_types'] -and @($Context.masked_content_types).Count -gt 0) {
+            $maskedTypesLabel = " ($(@($Context.masked_content_types) -join ', '))"
+        }
+        $lines.Add("- Sensitive content masked: true$maskedTypesLabel")
+    }
     $specialistStats = Get-SpecialistExecutionStats -SpecialistResults $SpecialistResults
     $lines.Add("- Specialist execution: completed $($specialistStats.completed) / skipped $($specialistStats.skipped) / failed $($specialistStats.failed)")
     $lines.Add("- Finding counts: blocker $blockerCount / major $majorCount / minor $minorCount / suggestion $suggestionCount")

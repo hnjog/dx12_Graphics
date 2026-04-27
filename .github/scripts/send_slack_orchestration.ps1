@@ -22,6 +22,8 @@ if ([string]::IsNullOrWhiteSpace($env:SLACK_WEBHOOK_URL)) {
 $blockerCount = Get-IntFromEnv -Value $env:ORCH_BLOCKER_COUNT
 $majorCount = Get-IntFromEnv -Value $env:ORCH_MAJOR_COUNT
 $minorCount = Get-IntFromEnv -Value $env:ORCH_MINOR_COUNT
+$sensitiveContentMasked = ($env:ORCH_SENSITIVE_CONTENT_MASKED -eq 'true')
+$maskedContentTypes = [string]$env:ORCH_MASKED_CONTENT_TYPES
 $shouldNotifySlack = $false
 
 if ($env:ORCH_REVIEW_STATUS -eq 'failed') {
@@ -59,12 +61,23 @@ try {
     $headRef = if ($null -ne $pr) { [string]$pr.head.ref } else { [string]$env:GITHUB_REF_NAME }
 
     $summaryText = ''
-    if ($env:ORCH_COMMENT_PATH -and (Test-Path -LiteralPath $env:ORCH_COMMENT_PATH)) {
+    if ($sensitiveContentMasked) {
+        $summaryText = 'Sensitive-looking strings were masked before AI orchestration. Slack intentionally omits the detailed summary for this run.'
+        if (-not [string]::IsNullOrWhiteSpace($maskedContentTypes)) {
+            $summaryText = "$summaryText`nMasked categories: $maskedContentTypes"
+        }
+    }
+    elseif ($env:ORCH_COMMENT_PATH -and (Test-Path -LiteralPath $env:ORCH_COMMENT_PATH)) {
         $summaryText = Get-Content -LiteralPath $env:ORCH_COMMENT_PATH -Raw -Encoding utf8
         $summaryText = $summaryText -replace '\r', ''
         if ($summaryText.Length -gt 1000) {
             $summaryText = $summaryText.Substring(0, 1000)
         }
+    }
+
+    $sensitiveMaskedLabel = 'no'
+    if ($sensitiveContentMasked) {
+        $sensitiveMaskedLabel = 'yes'
     }
 
     $message = @"
@@ -75,6 +88,7 @@ PR: $prTitle
 검증 상태: $($env:ORCH_VERIFICATION_STATUS)
 Human Gate: $($env:ORCH_HUMAN_GATE_REQUIRED)
 이슈 수: 차단 $blockerCount / 주요 $majorCount / 경미 $minorCount / 제안 $($env:ORCH_SUGGESTION_COUNT)
+민감정보 마스킹: $sensitiveMaskedLabel
 링크: $prUrl
 
 $summaryText

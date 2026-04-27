@@ -1,6 +1,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. "$PSScriptRoot\ai_orchestration_common.ps1"
+
 function Set-WorkflowOutput {
     param(
         [Parameter(Mandatory = $true)]
@@ -305,48 +307,6 @@ function Get-BoundedText {
     return $Text.Substring(0, $MaxLength) + "`n`n[Truncated $Label to first $MaxLength characters.]"
 }
 
-function Protect-SensitiveText {
-    param(
-        [AllowEmptyString()]
-        [string]$Text
-    )
-
-    $value = [string]$Text
-    if ([string]::IsNullOrEmpty($value)) {
-        return [pscustomobject]@{
-            text                  = $value
-            has_sensitive_content = $false
-            labels                = @()
-        }
-    }
-
-    $labels = New-Object System.Collections.Generic.List[string]
-    $rules = @(
-        @{ Pattern = 'https://hooks\.slack(?:-gov)?\.com/services/[A-Za-z0-9/_-]+'; Replacement = '[REDACTED_SLACK_WEBHOOK]'; Label = 'slack_webhook'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
-        @{ Pattern = '\bsk-[A-Za-z0-9][A-Za-z0-9_-]{12,}\b'; Replacement = '[REDACTED_OPENAI_KEY]'; Label = 'openai_key'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
-        @{ Pattern = '\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b'; Replacement = '[REDACTED_GITHUB_TOKEN]'; Label = 'github_token'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
-        @{ Pattern = '\bxox[baprs]-[A-Za-z0-9-]{10,}\b'; Replacement = '[REDACTED_SLACK_TOKEN]'; Label = 'slack_token'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
-        @{ Pattern = '\bAKIA[0-9A-Z]{16}\b'; Replacement = '[REDACTED_AWS_ACCESS_KEY]'; Label = 'aws_access_key'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
-        @{ Pattern = '\bBearer\s+[A-Za-z0-9._~+/\-=]{10,}\b'; Replacement = 'Bearer [REDACTED_BEARER_TOKEN]'; Label = 'bearer_token'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
-        @{ Pattern = '(?s)-----BEGIN [A-Z ]+PRIVATE KEY-----.+?-----END [A-Z ]+PRIVATE KEY-----'; Replacement = '[REDACTED_PRIVATE_KEY]'; Label = 'private_key'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
-        @{ Pattern = '(?im)\b(password|passwd|pwd|token|secret|api[_-]?key|access[_-]?key)\b(\s*[:=]\s*)([^\r\n]+)'; Replacement = '$1$2[REDACTED_CREDENTIAL]'; Label = 'inline_credential'; Options = ([System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Multiline) }
-    )
-
-    foreach ($rule in $rules) {
-        $regex = [regex]::new([string]$rule.Pattern, [System.Text.RegularExpressions.RegexOptions]$rule.Options)
-        if ($regex.IsMatch($value)) {
-            $labels.Add([string]$rule.Label) | Out-Null
-            $value = $regex.Replace($value, [string]$rule.Replacement)
-        }
-    }
-
-    return [pscustomobject]@{
-        text                  = $value
-        has_sensitive_content = ($labels.Count -gt 0)
-        labels                = @($labels | Select-Object -Unique)
-    }
-}
-
 function Get-ReviewFilePlan {
     param(
         [Parameter(Mandatory = $true)]
@@ -499,7 +459,9 @@ function Write-ReviewMarkdown {
         [string]$BaseRef,
         [Parameter(Mandatory = $true)]
         [object]$Review,
-        [string]$DiffNote
+        [string]$DiffNote,
+        [bool]$SensitiveContentMasked = $false,
+        [string[]]$MaskedContentTypes = @()
     )
 
     $findings = @($Review.findings)
@@ -519,6 +481,10 @@ function Write-ReviewMarkdown {
     $lines.Add("- 기준 브랜치: $BaseRef")
     $lines.Add("- 위험도: $localizedRiskLevel")
     $lines.Add("- 이슈 수: 차단 $blockerCount / 주요 $majorCount / 경미 $minorCount / 제안 $suggestionCount")
+    if ($SensitiveContentMasked) {
+        $maskedTypesLabel = if (@($MaskedContentTypes).Count -gt 0) { " ($($MaskedContentTypes -join ', '))" } else { '' }
+        $lines.Add("- 민감정보 마스킹: 적용됨$maskedTypesLabel")
+    }
     $lines.Add('')
     $lines.Add('### 요약')
     $lines.Add($Review.summary)
@@ -581,6 +547,8 @@ if (-not [string]::IsNullOrWhiteSpace($env:OPENAI_TIMEOUT_SECONDS)) {
 }
 
 $event = $null
+$sensitiveContentMasked = $false
+$maskedLabels = @()
 if ($env:GITHUB_EVENT_PATH -and (Test-Path -LiteralPath $env:GITHUB_EVENT_PATH)) {
     $event = Get-Content -LiteralPath $env:GITHUB_EVENT_PATH -Raw -Encoding utf8 | ConvertFrom-Json
 }
@@ -608,8 +576,8 @@ try {
             -ShouldNotifySlack $false `
             -SlackReason 'missing_openai_api_key'
 
-        Write-ReviewMarkdown -Path $commentPath -Status 'skipped' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
-        Write-ReviewMarkdown -Path $summaryPath -Status 'skipped' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
+        Write-ReviewMarkdown -Path $commentPath -Status 'skipped' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote -SensitiveContentMasked $sensitiveContentMasked -MaskedContentTypes $maskedLabels
+        Write-ReviewMarkdown -Path $summaryPath -Status 'skipped' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote -SensitiveContentMasked $sensitiveContentMasked -MaskedContentTypes $maskedLabels
         Get-Content -LiteralPath $summaryPath -Raw | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
         Set-WorkflowOutput -Name 'review_status' -Value 'skipped'
@@ -620,6 +588,8 @@ try {
         Set-WorkflowOutput -Name 'minor_count' -Value '0'
         Set-WorkflowOutput -Name 'suggestion_count' -Value '0'
         Set-WorkflowOutput -Name 'should_notify_slack' -Value 'false'
+        Set-WorkflowOutput -Name 'sensitive_content_masked' -Value ($sensitiveContentMasked.ToString().ToLowerInvariant())
+        Set-WorkflowOutput -Name 'masked_content_types' -Value ($maskedLabels -join ',')
         Set-WorkflowOutput -Name 'model_used' -Value $model
         exit 0
     }
@@ -644,8 +614,8 @@ try {
             -ShouldNotifySlack $false `
             -SlackReason 'no_diff'
 
-        Write-ReviewMarkdown -Path $commentPath -Status 'skipped' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
-        Write-ReviewMarkdown -Path $summaryPath -Status 'skipped' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
+        Write-ReviewMarkdown -Path $commentPath -Status 'skipped' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote -SensitiveContentMasked $sensitiveContentMasked -MaskedContentTypes $maskedLabels
+        Write-ReviewMarkdown -Path $summaryPath -Status 'skipped' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote -SensitiveContentMasked $sensitiveContentMasked -MaskedContentTypes $maskedLabels
         Get-Content -LiteralPath $summaryPath -Raw | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
         Set-WorkflowOutput -Name 'review_status' -Value 'skipped'
@@ -656,6 +626,8 @@ try {
         Set-WorkflowOutput -Name 'minor_count' -Value '0'
         Set-WorkflowOutput -Name 'suggestion_count' -Value '0'
         Set-WorkflowOutput -Name 'should_notify_slack' -Value 'false'
+        Set-WorkflowOutput -Name 'sensitive_content_masked' -Value ($sensitiveContentMasked.ToString().ToLowerInvariant())
+        Set-WorkflowOutput -Name 'masked_content_types' -Value ($maskedLabels -join ',')
         Set-WorkflowOutput -Name 'model_used' -Value $model
         exit 0
     }
@@ -813,8 +785,8 @@ $diffText
 
     $review = $rawText | ConvertFrom-Json
 
-    Write-ReviewMarkdown -Path $commentPath -Status 'completed' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
-    Write-ReviewMarkdown -Path $summaryPath -Status 'completed' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
+    Write-ReviewMarkdown -Path $commentPath -Status 'completed' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote -SensitiveContentMasked $sensitiveContentMasked -MaskedContentTypes $maskedLabels
+    Write-ReviewMarkdown -Path $summaryPath -Status 'completed' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote -SensitiveContentMasked $sensitiveContentMasked -MaskedContentTypes $maskedLabels
     Get-Content -LiteralPath $summaryPath -Raw | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
     $findings = @($review.findings)
@@ -831,6 +803,8 @@ $diffText
     Set-WorkflowOutput -Name 'minor_count' -Value ([string]$minorCount)
     Set-WorkflowOutput -Name 'suggestion_count' -Value ([string]$suggestionCount)
     Set-WorkflowOutput -Name 'should_notify_slack' -Value (([bool]$review.should_notify_slack).ToString().ToLowerInvariant())
+    Set-WorkflowOutput -Name 'sensitive_content_masked' -Value ($sensitiveContentMasked.ToString().ToLowerInvariant())
+    Set-WorkflowOutput -Name 'masked_content_types' -Value ($maskedLabels -join ',')
     Set-WorkflowOutput -Name 'model_used' -Value $model
 }
 catch {
@@ -844,8 +818,8 @@ catch {
         -ShouldNotifySlack $true `
         -SlackReason 'workflow_failed'
 
-    Write-ReviewMarkdown -Path $commentPath -Status 'failed' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
-    Write-ReviewMarkdown -Path $summaryPath -Status 'failed' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote
+    Write-ReviewMarkdown -Path $commentPath -Status 'failed' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote -SensitiveContentMasked $sensitiveContentMasked -MaskedContentTypes $maskedLabels
+    Write-ReviewMarkdown -Path $summaryPath -Status 'failed' -Model $model -BaseRef $baseRef -Review $review -DiffNote $diffNote -SensitiveContentMasked $sensitiveContentMasked -MaskedContentTypes $maskedLabels
     Get-Content -LiteralPath $summaryPath -Raw | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
     Set-WorkflowOutput -Name 'review_status' -Value 'failed'
@@ -856,5 +830,7 @@ catch {
     Set-WorkflowOutput -Name 'minor_count' -Value '0'
     Set-WorkflowOutput -Name 'suggestion_count' -Value '0'
     Set-WorkflowOutput -Name 'should_notify_slack' -Value 'true'
+    Set-WorkflowOutput -Name 'sensitive_content_masked' -Value ($sensitiveContentMasked.ToString().ToLowerInvariant())
+    Set-WorkflowOutput -Name 'masked_content_types' -Value ($maskedLabels -join ',')
     Set-WorkflowOutput -Name 'model_used' -Value $model
 }

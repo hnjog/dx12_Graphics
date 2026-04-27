@@ -202,6 +202,7 @@ try {
     Set-WorkflowOutput -Name 'docs_only' -Value ($context.is_docs_only.ToString().ToLowerInvariant())
     Set-WorkflowOutput -Name 'scope_tags' -Value (($scopeTags -join ','))
     Set-WorkflowOutput -Name 'sensitive_content_masked' -Value ($sensitiveContentMasked.ToString().ToLowerInvariant())
+    Set-WorkflowOutput -Name 'masked_content_types' -Value ($maskedContentTypes -join ',')
     Set-WorkflowOutput -Name 'orchestration_mode' -Value ([string]$orchestrationPlan.mode)
     Set-WorkflowOutput -Name 'run_dx12_specialist' -Value ($orchestrationPlan.run_dx12_specialist.ToString().ToLowerInvariant())
     Set-WorkflowOutput -Name 'run_regression_specialist' -Value ($orchestrationPlan.run_regression_specialist.ToString().ToLowerInvariant())
@@ -245,6 +246,7 @@ catch {
     Set-WorkflowOutput -Name 'docs_only' -Value 'false'
     Set-WorkflowOutput -Name 'scope_tags' -Value 'context_collection_failed'
     Set-WorkflowOutput -Name 'sensitive_content_masked' -Value 'false'
+    Set-WorkflowOutput -Name 'masked_content_types' -Value ''
     Set-WorkflowOutput -Name 'orchestration_mode' -Value ([string]$orchestrationPlan.mode)
     Set-WorkflowOutput -Name 'run_dx12_specialist' -Value 'false'
     Set-WorkflowOutput -Name 'run_regression_specialist' -Value 'false'
