@@ -25,6 +25,29 @@
 | Slack 알림 | 운영 중 |
 | 대표 검증 기준 | PR / Build / Comment / Slack |
 
+## 기술 스택 / 운영 구성
+
+### 실행 흐름 전체 요약
+
+![dx12_Graphics AI orchestration execution flow](docs/images/ai_stack_overview.png)
+
+| 영역 | 사용 기술 / 도구 | 역할 |
+| --- | --- | --- |
+| 엔진 / 그래픽스 | `DirectX 12`, `C++`, `Visual Studio` | DX12 기반 엔진 작업 공간 |
+| 빌드 / 검증 | `MSBuild`, `windows-latest`, `Debug x64`, `Release x64` | PR 기준 빌드 검증 |
+| 리뷰 자동화 | `GitHub Actions`, `PowerShell` | AI 리뷰 / 오케스트레이션 workflow 실행 |
+| AI 리뷰 | `OpenAI Responses API`, `gpt-5.4-mini` | PR diff 기반 리뷰와 specialist / moderator 판단 |
+| 협업 / 알림 | `GitHub PR comment`, `Slack Webhook` | 리뷰 결과 기록과 최종 알림 |
+| 문서 / 설계 | `README`, `docs/*`, `Notion`, `FigJam` | 설계 이유, 운영 기록, 시각 구조 정리 |
+
+### 전체 요약
+
+- `feature/* -> develop -> main` 브랜치 흐름 위에서 리뷰 자동화를 운영합니다.
+- `AI Review`는 빠른 1차 리뷰를 담당합니다.
+- `AI Orchestration MVP`는 context 수집, 조건부 specialist 실행, moderator merge, verification gate를 담당합니다.
+- `Slack`은 최종 상태와 예외 상황을 전달합니다.
+- `Notion / FigJam / README`는 설계와 운영 기록을 남기는 축으로 사용합니다.
+
 ## AI 작업 구조
 
 현재 AI 작업 구조는 `기존 AI 리뷰`와 `조건부 AI 오케스트레이션`이 함께 동작하는 형태입니다.
@@ -86,6 +109,7 @@ dx12_Graphics/
 - [AI Collaboration Workflow](docs/ai-collaboration-workflow.md)
 - [AI Review Workflow](docs/ai-review-workflow.md)
 - [AI Review Troubleshooting](docs/ai-review-troubleshooting.md)
+- [Security and Secrets](docs/security-and-secrets.md)
 - [AI Usage Evidence](docs/ai-usage-evidence.md)
 - [Contributing](CONTRIBUTING.md)
 
