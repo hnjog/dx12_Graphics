@@ -133,13 +133,20 @@ try {
         $changedFilesForPrompt = @()
     }
 
+    $maskedPrTitle = Protect-SensitiveText -Text $prTitle
+    $maskedPrBody = Protect-SensitiveText -Text $prBody
+    $maskedDiffText = Protect-SensitiveText -Text $diffText
+    $maskedReviewRules = Protect-SensitiveText -Text (Get-BoundedText -Text $reviewRules -MaxLength 4500 -Label 'review rules')
+    $maskedTestingStrategy = Protect-SensitiveText -Text (Get-BoundedText -Text $testingStrategy -MaxLength 3500 -Label 'testing strategy')
+    $maskedPrTemplate = Protect-SensitiveText -Text (Get-BoundedText -Text $prTemplate -MaxLength 2000 -Label 'pull request template')
+
     $maskedFragments = @(
-        Protect-SensitiveText -Text $prTitle,
-        Protect-SensitiveText -Text $prBody,
-        Protect-SensitiveText -Text $diffText,
-        Protect-SensitiveText -Text (Get-BoundedText -Text $reviewRules -MaxLength 4500 -Label 'review rules'),
-        Protect-SensitiveText -Text (Get-BoundedText -Text $testingStrategy -MaxLength 3500 -Label 'testing strategy'),
-        Protect-SensitiveText -Text (Get-BoundedText -Text $prTemplate -MaxLength 2000 -Label 'pull request template')
+        $maskedPrTitle,
+        $maskedPrBody,
+        $maskedDiffText,
+        $maskedReviewRules,
+        $maskedTestingStrategy,
+        $maskedPrTemplate
     )
 
     $prTitle = [string]$maskedFragments[0].text

@@ -656,12 +656,18 @@ try {
         $changedFilesNote = "Changed files list was sorted by review priority and truncated to the first $($changedFilesForPrompt.Count) entries."
     }
 
+    $maskedPrTitle = Protect-SensitiveText -Text $prTitle
+    $maskedPrBody = Protect-SensitiveText -Text $prBodyForPrompt
+    $maskedDiffText = Protect-SensitiveText -Text $diffText
+    $maskedReviewRules = Protect-SensitiveText -Text $reviewRulesForPrompt
+    $maskedTestingStrategy = Protect-SensitiveText -Text $testingStrategyForPrompt
+
     $maskedFragments = @(
-        Protect-SensitiveText -Text $prTitle,
-        Protect-SensitiveText -Text $prBodyForPrompt,
-        Protect-SensitiveText -Text $diffText,
-        Protect-SensitiveText -Text $reviewRulesForPrompt,
-        Protect-SensitiveText -Text $testingStrategyForPrompt
+        $maskedPrTitle,
+        $maskedPrBody,
+        $maskedDiffText,
+        $maskedReviewRules,
+        $maskedTestingStrategy
     )
 
     $prTitle = [string]$maskedFragments[0].text
