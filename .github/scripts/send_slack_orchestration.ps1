@@ -60,6 +60,7 @@ try {
     $prUrl = if ($null -ne $pr) { [string]$pr.html_url } else { "https://github.com/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)" }
     $baseRef = if ($null -ne $pr) { [string]$pr.base.ref } else { [string]$env:AI_REVIEW_BASE_REF }
     $headRef = if ($null -ne $pr) { [string]$pr.head.ref } else { [string]$env:GITHUB_REF_NAME }
+    $prTitleForSlack = if ($sensitiveContentMasked) { '민감정보 보호로 제목 생략' } else { $prTitle }
 
     $summaryText = ''
     if ($sensitiveContentMasked) {
@@ -95,7 +96,7 @@ try {
 
     $message = @"
 [AI 오케스트레이션] $localizedDecision
-PR: $prTitle
+PR: $prTitleForSlack
 기준 브랜치: $baseRef
 작업 브랜치: $headRef
 검증 상태: $localizedVerificationStatus
