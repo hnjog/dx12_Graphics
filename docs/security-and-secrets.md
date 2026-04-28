@@ -111,3 +111,24 @@ Even with masking enabled, the safest rule is still:
 2. Consider human-gate escalation when sensitive content is detected
 3. Consider reducing Slack detail even further for high-risk repositories
 4. Add repository secret scanning if the project starts handling more operational credentials
+
+## Minimum Regression Check Procedure
+
+Use the following representative input strings when validating masking behavior after workflow or regex changes:
+
+1. Slack webhook
+   - Example: `https://hooks.slack.com/services/T000/B000/secret-token`
+2. Bearer token
+   - Example: `Authorization: Bearer sample-secret-token`
+3. Private key block
+   - Example: `-----BEGIN PRIVATE KEY----- ... -----END PRIVATE KEY-----`
+4. Inline credential
+   - Example: `password = super-secret-value`
+
+Expected results:
+
+- OpenAI review/orchestration inputs should replace the sensitive-looking text with masked placeholders.
+- `sensitive_content_masked` should become `true` when any representative string is detected.
+- `masked_content_types` should list the matching category or categories.
+- PR comment should show that masking was applied.
+- Slack should switch to the short sensitive-mode summary and avoid posting the detailed body.

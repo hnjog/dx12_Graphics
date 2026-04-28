@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 function Get-IntFromEnv {
@@ -15,7 +15,7 @@ function Get-IntFromEnv {
 }
 
 if ([string]::IsNullOrWhiteSpace($env:SLACK_WEBHOOK_URL)) {
-    Write-Host 'SLACK_WEBHOOK_URL이 설정되지 않아 Slack 알림을 건너뜁니다.'
+    Write-Host 'SLACK_WEBHOOK_URL???ㅼ젙?섏? ?딆븘 Slack ?뚮┝??嫄대꼫?곷땲??'
     exit 0
 }
 
@@ -37,7 +37,7 @@ elseif ($env:AI_REVIEW_SHOULD_NOTIFY_SLACK -eq 'true') {
 }
 
 if (-not $shouldNotifySlack) {
-    Write-Host '현재 AI 리뷰 결과는 Slack 알림 대상이 아닙니다.'
+    Write-Host '?꾩옱 AI 由щ럭 寃곌낵??Slack ?뚮┝ ??곸씠 ?꾨떃?덈떎.'
     exit 0
 }
 
@@ -59,9 +59,9 @@ try {
 
     $summaryText = ''
     if ($sensitiveContentMasked) {
-        $summaryText = 'Sensitive-looking strings were masked before AI review. Slack intentionally omits the detailed summary for this run.'
+        $summaryText = '誘쇨컧?뺣낫濡?蹂댁씠??臾몄옄?댁쓣 留덉뒪?뱁뻽湲??뚮Ц???대쾲 ?ㅽ뻾?먯꽌???곸꽭 ?붿빟??Slack???ы븿?섏? ?딆븯?듬땲??'
         if (-not [string]::IsNullOrWhiteSpace($maskedContentTypes)) {
-            $summaryText = "$summaryText`nMasked categories: $maskedContentTypes"
+            $summaryText = "$summaryText`n留덉뒪??踰붿＜: $maskedContentTypes"
         }
     }
     elseif ($env:AI_REVIEW_COMMENT_PATH -and (Test-Path -LiteralPath $env:AI_REVIEW_COMMENT_PATH)) {
@@ -73,25 +73,22 @@ try {
     }
 
     $localizedStatus = switch ([string]$env:AI_REVIEW_STATUS) {
-        'completed' { '완료' }
-        'failed' { '실패' }
-        'skipped' { '건너뜀' }
+        'completed' { '?꾨즺' }
+        'failed' { '?ㅽ뙣' }
+        'skipped' { '嫄대꼫?' }
         default { [string]$env:AI_REVIEW_STATUS }
     }
 
-    $sensitiveMaskedLabel = 'no'
-    if ($sensitiveContentMasked) {
-        $sensitiveMaskedLabel = 'yes'
-    }
+    $sensitiveMaskedLabel = if ($sensitiveContentMasked) { "적용" } else { "미적용" }
 
     $message = @"
-[AI 리뷰] $localizedStatus
+[AI 由щ럭] $localizedStatus
 PR: $prTitle
-기준 브랜치: $baseRef
-작업 브랜치: $headRef
-이슈 수: 차단 $blockerCount / 주요 $majorCount / 경미 $minorCount / 제안 $($env:AI_REVIEW_SUGGESTION_COUNT)
-민감정보 마스킹: $sensitiveMaskedLabel
-링크: $prUrl
+湲곗? 釉뚮옖移? $baseRef
+?묒뾽 釉뚮옖移? $headRef
+?댁뒋 ?? 李⑤떒 $blockerCount / 二쇱슂 $majorCount / 寃쎈? $minorCount / ?쒖븞 $($env:AI_REVIEW_SUGGESTION_COUNT)
+誘쇨컧?뺣낫 留덉뒪?? $sensitiveMaskedLabel
+留곹겕: $prUrl
 
 $summaryText
 "@
@@ -106,8 +103,8 @@ $summaryText
         -ContentType 'application/json' `
         -Body ($payload | ConvertTo-Json -Depth 10) | Out-Null
 
-    Write-Host 'Slack 알림을 전송했습니다.'
+    Write-Host 'Slack ?뚮┝???꾩넚?덉뒿?덈떎.'
 }
 catch {
-    Write-Warning "Slack 알림 전송에 실패했습니다: $($_.Exception.Message)"
+    Write-Warning "Slack ?뚮┝ ?꾩넚???ㅽ뙣?덉뒿?덈떎: $($_.Exception.Message)"
 }
