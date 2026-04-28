@@ -169,7 +169,7 @@ try {
             $scopeTags += 'sensitive_content_masked'
         }
 
-        Add-DiffNote -Note "Potential sensitive strings were masked before PR context was sent to AI reviewers. Categories: $($maskedContentTypes -join ', ')."
+        Add-DiffNote -Note "AI 리뷰 입력으로 전달되기 전에 민감정보로 보이는 문자열을 마스킹했습니다. 범주: $($maskedContentTypes -join ', ')."
     }
 
     $orchestrationPlan = Get-OrchestrationExecutionPlan `

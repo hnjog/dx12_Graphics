@@ -686,10 +686,10 @@ try {
     if ($maskedLabels.Count -gt 0) {
         $maskedLabels = @($maskedLabels | Select-Object -Unique)
         if ([string]::IsNullOrWhiteSpace($diffNote)) {
-            $diffNote = "Potential sensitive strings were masked before PR content was sent to AI review. Categories: $($maskedLabels -join ', ')."
+            $diffNote = "AI 리뷰 입력으로 전달되기 전에 민감정보로 보이는 문자열을 마스킹했습니다. 범주: $($maskedLabels -join ', ')."
         }
         else {
-            $diffNote = "$diffNote`nPotential sensitive strings were masked before PR content was sent to AI review. Categories: $($maskedLabels -join ', ')."
+            $diffNote = "$diffNote`nAI 리뷰 입력으로 전달되기 전에 민감정보로 보이는 문자열을 마스킹했습니다. 범주: $($maskedLabels -join ', ')."
         }
     }
 

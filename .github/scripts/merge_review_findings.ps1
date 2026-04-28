@@ -1,4 +1,4 @@
-. "$PSScriptRoot\ai_orchestration_common.ps1"
+﻿. "$PSScriptRoot\ai_orchestration_common.ps1"
 
 $tempRoot = Get-TempRoot
 $commentPath = Join-Path $tempRoot 'ai-orchestrator-comment.md'
@@ -47,6 +47,110 @@ function New-MergedReviewResult {
         review_status             = $ReviewStatus
         moderator_mode            = $ModeratorMode
         moderator_fallback_reason = $ModeratorFallbackReason
+    }
+}
+
+function Get-LocalizedRiskLevel {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RiskLevel
+    )
+
+    switch ($RiskLevel) {
+        'low' { return '??쓬' }
+        'medium' { return '蹂댄넻' }
+        'high' { return '?믪쓬' }
+        'unknown' { return '?????놁쓬' }
+        default { return $RiskLevel }
+    }
+}
+
+function Get-LocalizedDecision {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Decision
+    )
+
+    switch ($Decision) {
+        'pass' { return '?듦낵' }
+        'needs_human' { return '?щ엺 寃???꾩슂' }
+        'failed' { return '?ㅽ뙣' }
+        default { return $Decision }
+    }
+}
+
+function Get-LocalizedVerificationStatus {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Status
+    )
+
+    switch ($Status) {
+        'passed' { return '?듦낵' }
+        'failed' { return '?ㅽ뙣' }
+        'skipped' { return '嫄대꼫?' }
+        default { return $Status }
+    }
+}
+
+function Get-LocalizedSeverity {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Severity
+    )
+
+    switch ($Severity) {
+        'Blocker' { return '李⑤떒' }
+        'Major' { return '二쇱슂' }
+        'Minor' { return '寃쎈?' }
+        'Suggestion' { return '?쒖븞' }
+        default { return $Severity }
+    }
+}
+
+function Get-LocalizedHumanGateReason {
+    param(
+        [AllowEmptyString()]
+        [string]$Reason
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Reason)) {
+        return $Reason
+    }
+
+    $parts = @(
+        ($Reason -split ';') |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+
+    $localized = foreach ($part in $parts) {
+        switch ($part) {
+            'verification_failed' { 'verification ?ㅽ뻾???ㅽ뙣?덉뒿?덈떎' }
+            'verification_skipped_unsafely' { 'verification???덉쟾?섏? ?딆? ?댁쑀濡?嫄대꼫?곗뼱議뚯뒿?덈떎' }
+            'specialist_review_failed' { 'specialist review ?ㅽ뻾???ㅽ뙣?덉뒿?덈떎' }
+            'specialist_reviews_unavailable' { '?ъ슜 媛?ν븳 specialist review 寃곌낵媛 ?놁뒿?덈떎' }
+            'verification_or_review_failed' { 'verification ?먮뒗 review ?ㅽ뻾???ㅽ뙣?덉뒿?덈떎' }
+            'major_findings_present' { '二쇱슂 ?댁뒋媛 ?⑥븘 ?덉뒿?덈떎' }
+            'merge_failed' { 'merge ?④퀎媛 ?ㅽ뙣?덉뒿?덈떎' }
+            'none' { '?놁쓬' }
+            default { $part }
+        }
+    }
+
+    return ($localized -join '; ')
+}
+
+function Get-ReviewerDisplayName {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Reviewer
+    )
+
+    switch ($Reviewer) {
+        'dx12_lifetime_sync' { return 'dx12_lifetime_sync' }
+        'regression_testing' { return 'regression_testing' }
+        default { return $Reviewer }
     }
 }
 
@@ -314,27 +418,27 @@ function Get-DeterministicMergedResult {
 
     $summary = ''
     if ($uniqueFindings.Count -eq 0) {
-        $summary = 'No material findings were reported after combining specialist reviews and verification.'
+        $summary = 'specialist review? verification 寃곌낵瑜?醫낇빀????蹂닿퀬??留뚰븳 二쇱슂 ?댁뒋瑜?李얠? 紐삵뻽?듬땲??'
     }
     else {
-        $summary = "The moderator collected $($uniqueFindings.Count) material findings from specialist reviews."
+        $summary = "moderator媛 specialist review 寃곌낵瑜?醫낇빀??二쇱슂 ?댁뒋 $($uniqueFindings.Count)嫄댁쓣 ?뺣━?덉뒿?덈떎."
     }
 
     $overallAssessment = ''
     switch ($finalDecision) {
         'failed' {
             if ($verificationSafety.unsafe_skip) {
-                $overallAssessment = 'Verification was skipped for an unsafe reason, so a person should review the result.'
+                $overallAssessment = 'verification???덉쟾?섏? ?딆? ?댁쑀濡?嫄대꼫?곗뼱???먮룞 ?먮떒???좊ː?섍린 ?대졄?듬땲?? ?щ엺??寃곌낵瑜?寃?좏빐???⑸땲??'
             }
             else {
-                $overallAssessment = 'The orchestration or verification stage failed, so a person should review the result.'
+                $overallAssessment = '?ㅼ??ㅽ듃?덉씠???먮뒗 verification ?④퀎媛 ?ㅽ뙣???먮룞 ?먮떒???좊ː?섍린 ?대졄?듬땲?? ?щ엺??寃곌낵瑜?寃?좏빐???⑸땲??'
             }
         }
         'needs_human' {
-            $overallAssessment = 'A person should make the final decision because major findings remain.'
+            $overallAssessment = '?⑥븘 ?덈뒗 二쇱슂 ?댁뒋 ?먮뒗 ?댁쁺??遺덊솗?ㅼ꽦 ?뚮Ц???щ엺??理쒖쥌 ?먮떒???대젮???⑸땲??'
         }
         default {
-            $overallAssessment = 'The current automated review and verification gate passed without major issues.'
+            $overallAssessment = '?꾩옱 ?먮룞 由щ럭? verification gate 湲곗??먯꽌??癒몄?瑜?留됱쓣 留뚰븳 二쇱슂 臾몄젣瑜??뺤씤?섏? 紐삵뻽?듬땲??'
         }
     }
 
@@ -372,84 +476,84 @@ function Write-OrchestrationMarkdown {
     $majorCount = @($findings | Where-Object { $_.severity -eq 'Major' }).Count
     $minorCount = @($findings | Where-Object { $_.severity -eq 'Minor' }).Count
     $suggestionCount = @($findings | Where-Object { $_.severity -eq 'Suggestion' }).Count
-    $humanGateLabel = "Not required"
+    $humanGateLabel = "불필요"
     if ($MergedReview.human_gate_required) {
-        $humanGateLabel = "Required"
+        $humanGateLabel = "필요"
     }
 
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add("## AI Orchestration MVP")
     $lines.Add("")
-    $lines.Add("- Base branch: $($Context.base_ref)")
-    $lines.Add("- Head branch: $($Context.head_ref)")
-    $lines.Add("- Final decision: $($MergedReview.final_decision)")
-    $lines.Add("- Risk level: $($MergedReview.risk_level)")
+    $lines.Add("- 湲곗? 釉뚮옖移? $($Context.base_ref)")
+    $lines.Add("- ?묒뾽 釉뚮옖移? $($Context.head_ref)")
+    $lines.Add("- 理쒖쥌 ?먮떒: $([string](Get-LocalizedDecision -Decision ([string]$MergedReview.final_decision))) ($($MergedReview.final_decision))")
+    $lines.Add("- ?꾪뿕?? $([string](Get-LocalizedRiskLevel -RiskLevel ([string]$MergedReview.risk_level)))")
     $lines.Add("- Human Gate: $humanGateLabel")
     if (-not [string]::IsNullOrWhiteSpace([string]$MergedReview.human_gate_reason)) {
-        $lines.Add("- Human Gate reason: $($MergedReview.human_gate_reason)")
+        $lines.Add("- Human Gate ?ъ쑀: $(Get-LocalizedHumanGateReason -Reason ([string]$MergedReview.human_gate_reason))")
     }
-    $lines.Add("- Verification status: $($Verification.verification_status)")
+    $lines.Add("- Verification ?곹깭: $([string](Get-LocalizedVerificationStatus -Status ([string]$Verification.verification_status)))")
     if (-not [string]::IsNullOrWhiteSpace([string]$Verification.verification_reason)) {
-        $lines.Add("- Verification reason: $($Verification.verification_reason)")
+        $lines.Add("- Verification ?ъ쑀: $($Verification.verification_reason)")
     }
     if (-not [string]::IsNullOrWhiteSpace([string]$MergedReview.moderator_mode)) {
         $lines.Add("- Moderator mode: $($MergedReview.moderator_mode)")
     }
     if (-not [string]::IsNullOrWhiteSpace([string]$MergedReview.moderator_fallback_reason)) {
-        $lines.Add("- Moderator fallback reason: $($MergedReview.moderator_fallback_reason)")
+        $lines.Add("- Moderator fallback ?ъ쑀: $($MergedReview.moderator_fallback_reason)")
     }
     if ($null -ne $Context.PSObject.Properties['orchestration_plan']) {
         $plan = $Context.orchestration_plan
-        $lines.Add("- Orchestration mode: $($plan.mode)")
-        $lines.Add("- Specialist plan: dx12 $($plan.run_dx12_specialist) / regression $($plan.run_regression_specialist)")
-        $lines.Add("- Moderator policy: $($plan.moderator_policy)")
+        $lines.Add("- ?ㅼ??ㅽ듃?덉씠??紐⑤뱶: $($plan.mode)")
+        $lines.Add("- Specialist 怨꾪쉷: dx12 $($plan.run_dx12_specialist) / regression $($plan.run_regression_specialist)")
+        $lines.Add("- Moderator ?뺤콉: $($plan.moderator_policy)")
     }
     if ($null -ne $Context.PSObject.Properties['sensitive_content_masked'] -and [bool]$Context.sensitive_content_masked) {
         $maskedTypesLabel = ''
         if ($null -ne $Context.PSObject.Properties['masked_content_types'] -and @($Context.masked_content_types).Count -gt 0) {
             $maskedTypesLabel = " ($(@($Context.masked_content_types) -join ', '))"
         }
-        $lines.Add("- Sensitive content masked: true$maskedTypesLabel")
+        $lines.Add("- 민감정보 마스킹: 적용됨$maskedTypesLabel")
     }
     $specialistStats = Get-SpecialistExecutionStats -SpecialistResults $SpecialistResults
-    $lines.Add("- Specialist execution: completed $($specialistStats.completed) / skipped $($specialistStats.skipped) / failed $($specialistStats.failed)")
-    $lines.Add("- Finding counts: blocker $blockerCount / major $majorCount / minor $minorCount / suggestion $suggestionCount")
+    $lines.Add("- Specialist ?ㅽ뻾: completed $($specialistStats.completed) / skipped $($specialistStats.skipped) / failed $($specialistStats.failed)")
+    $lines.Add("- ?댁뒋 ?? 李⑤떒 $blockerCount / 二쇱슂 $majorCount / 寃쎈? $minorCount / ?쒖븞 $suggestionCount")
     $lines.Add("")
-    $lines.Add("### Summary")
+    $lines.Add("### ?붿빟")
     $lines.Add([string]$MergedReview.summary)
     $lines.Add("")
-    $lines.Add("### Overall Assessment")
+    $lines.Add("### 醫낇빀 ?먮떒")
     $lines.Add([string]$MergedReview.overall_assessment)
     $lines.Add("")
-    $lines.Add("### Specialist Review Summary")
-    $lines.Add("- Execution: completed $($specialistStats.completed) / skipped $($specialistStats.skipped) / failed $($specialistStats.failed)")
+    $lines.Add("### Specialist 由щ럭 ?붿빟")
+    $lines.Add("- ?ㅽ뻾 ?붿빟: completed $($specialistStats.completed) / skipped $($specialistStats.skipped) / failed $($specialistStats.failed)")
     foreach ($specialist in $SpecialistResults) {
-        $lines.Add("- $([string]$specialist.reviewer): $([string]$specialist.summary)")
+        $lines.Add("- $(Get-ReviewerDisplayName -Reviewer ([string]$specialist.reviewer)): $([string]$specialist.summary)")
     }
     $lines.Add("")
-    $lines.Add("### Verification Result")
-    $lines.Add("- Status: $($Verification.verification_status)")
-    $lines.Add("- Summary: $($Verification.summary)")
+    $lines.Add("### Verification 寃곌낵")
+    $lines.Add("- ?곹깭: $([string](Get-LocalizedVerificationStatus -Status ([string]$Verification.verification_status)))")
+    $lines.Add("- ?붿빟: $($Verification.summary)")
     if (-not [string]::IsNullOrWhiteSpace([string]$Verification.verification_reason)) {
-        $lines.Add("- Reason: $($Verification.verification_reason)")
+        $lines.Add("- ?ъ쑀: $($Verification.verification_reason)")
     }
     foreach ($check in @($Verification.checks)) {
-        $lines.Add("- $($check.name): $($check.status) - $($check.note)")
+        $lines.Add("- $($check.name): $([string](Get-LocalizedVerificationStatus -Status ([string]$check.status))) - $($check.note)")
         if ($null -ne $check.PSObject.Properties['exit_code']) {
             $lines.Add("  - Exit code: $($check.exit_code)")
         }
         if ($null -ne $check.PSObject.Properties['log_excerpt'] -and -not [string]::IsNullOrWhiteSpace([string]$check.log_excerpt)) {
-            $lines.Add("  - Log excerpt:")
+            $lines.Add("  - 濡쒓렇 諛쒖톸:")
             foreach ($line in @(([string]$check.log_excerpt) -split "\r?\n")) {
                 $lines.Add("    $line")
             }
         }
     }
     $lines.Add("")
-    $lines.Add("### Findings")
+    $lines.Add("### ?몃? ?댁뒋")
 
     if ($findings.Count -eq 0) {
-        $lines.Add("- No material findings were reported.")
+        $lines.Add("- 蹂닿퀬??二쇱슂 ?댁뒋媛 ?놁뒿?덈떎.")
     }
     else {
         $index = 1
@@ -459,11 +563,11 @@ function Write-OrchestrationMarkdown {
                 $location = "{0}:{1}" -f $location, $finding.line_start
             }
 
-            $lines.Add("$index. [$([string]$finding.severity)] $($finding.title)")
-            $lines.Add("   - Location: $location")
-            $lines.Add("   - Risk: $($finding.risk)")
-            $lines.Add("   - Recommendation: $($finding.recommendation)")
-            $lines.Add("   - Confidence: $($finding.confidence)")
+            $lines.Add("$index. [$(Get-LocalizedSeverity -Severity ([string]$finding.severity))] $($finding.title)")
+            $lines.Add("   - ?꾩튂: $location")
+            $lines.Add("   - ?꾪뿕: $($finding.risk)")
+            $lines.Add("   - 沅뚯옣 ??? $($finding.recommendation)")
+            $lines.Add("   - ?좊ː?? $($finding.confidence)")
             $index++
         }
     }
@@ -487,7 +591,7 @@ try {
     }
 
     if ($specialistResults.Count -eq 0) {
-        throw 'No specialist review result files were found for merge.'
+        throw 'merge ?④퀎?먯꽌 ?ъ슜??specialist review 寃곌낵 ?뚯씪??李얠? 紐삵뻽?듬땲??'
     }
 
     if (-not [string]::IsNullOrWhiteSpace([string]$env:VERIFICATION_RESULT_PATH) -and (Test-Path -LiteralPath $env:VERIFICATION_RESULT_PATH)) {
@@ -496,7 +600,7 @@ try {
     else {
         $verification = [pscustomobject]@{
             verification_status = 'failed'
-            summary             = 'Verification result file was missing, so the verification state could not be trusted.'
+            summary             = 'verification 寃곌낵 ?뚯씪???놁뼱 ?꾩옱 寃利??곹깭瑜??좊ː?????놁뒿?덈떎.'
             verification_reason = 'missing_result'
             skip_is_safe        = $false
             checks              = @()
@@ -522,6 +626,7 @@ try {
                 'If verification is skipped for any other reason, do not return pass.'
                 'If every specialist review is skipped, do not return pass.'
                 'If any specialist review failed, require a human gate.'
+                'Write all user-facing prose in Korean.'
                 'Write concise user-facing prose.'
                 'Keep enum values exactly as specified in the schema.'
                 'Return at most 8 findings.'
@@ -608,7 +713,7 @@ try {
         }
         catch {
             $fallbackReason = Get-OpenAIErrorDetail -Exception $_.Exception
-            Write-Warning "OpenAI moderator failed; using deterministic fallback. Detail: $fallbackReason"
+            Write-Warning "OpenAI moderator ?ㅽ뻾???ㅽ뙣?섏뿬 deterministic fallback?쇰줈 ?泥댄빀?덈떎. ?곸꽭: $fallbackReason"
             $mergedReview = Get-DeterministicMergedResult `
                 -Verification $verification `
                 -SpecialistResults $specialistResults `
@@ -621,14 +726,14 @@ try {
             -Verification $verification `
             -SpecialistResults $specialistResults `
             -ModeratorMode 'deterministic_conditional_skip' `
-            -ModeratorFallbackReason 'OpenAI moderator skipped by conditional orchestration policy'
+            -ModeratorFallbackReason '議곌굔遺 ?ㅼ??ㅽ듃?덉씠???뺤콉???곕씪 OpenAI moderator瑜?嫄대꼫?곗뿀?듬땲??'
     }
     else {
         $mergedReview = Get-DeterministicMergedResult `
             -Verification $verification `
             -SpecialistResults $specialistResults `
             -ModeratorMode 'deterministic_no_api_key' `
-            -ModeratorFallbackReason 'OPENAI_API_KEY not configured'
+            -ModeratorFallbackReason 'OPENAI_API_KEY媛 ?ㅼ젙?섏? ?딆븯?듬땲??'
     }
 
     $mergedReview = Apply-FinalDecisionGuard -MergedReview $mergedReview -Verification $verification -SpecialistResults $specialistResults -Context $context
@@ -672,14 +777,14 @@ catch {
 
     $verification = [pscustomobject]@{
         verification_status = 'failed'
-        summary             = 'The merge stage failed, so the verification state should not be trusted.'
+        summary             = 'merge ?④퀎媛 ?ㅽ뙣?덉쑝誘濡?verification ?곹깭瑜??좊ː?????놁뒿?덈떎.'
         verification_reason = 'merge_failed'
         skip_is_safe        = $false
         checks              = @()
     }
 
     $mergedReview = New-MergedReviewResult `
-        -Summary 'The orchestration merge stage failed.' `
+        -Summary '?ㅼ??ㅽ듃?덉씠??merge ?④퀎媛 ?ㅽ뙣?덉뒿?덈떎.' `
         -OverallAssessment ([string]$_.Exception.Message) `
         -RiskLevel 'unknown' `
         -Findings @() `
