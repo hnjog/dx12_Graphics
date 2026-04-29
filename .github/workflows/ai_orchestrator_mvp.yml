@@ -34,6 +34,10 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      - name: Run sensitive text smoke check
+        shell: pwsh
+        run: ./.github/scripts/test_sensitive_masking.ps1
+
       - name: Collect review context
         id: collect_context
         shell: pwsh

@@ -66,6 +66,7 @@ Current first-pass masking includes:
 - GitHub personal access tokens
 - Slack tokens
 - AWS access key IDs
+- AWS secret access keys in common inline assignment forms
 - `Bearer ...` style tokens
 - private key blocks
 - obvious inline credential assignments such as:
@@ -132,3 +133,16 @@ Expected results:
 - `masked_content_types` should list the matching category or categories.
 - PR comment should show that masking was applied.
 - Slack should switch to the short sensitive-mode summary and avoid posting the detailed body.
+
+## Automated Smoke Check
+
+Both review workflows now run `./.github/scripts/test_sensitive_masking.ps1` before AI execution.
+
+This smoke check validates representative cases for:
+
+- Slack webhook
+- Bearer token
+- private key block
+- inline credential
+- AWS secret access key
+- benign code-style reference that should remain unmasked

@@ -31,6 +31,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Run sensitive text smoke check
+        shell: pwsh
+        run: ./.github/scripts/test_sensitive_masking.ps1
+
       - name: Run AI review
         id: ai_review
         shell: pwsh
