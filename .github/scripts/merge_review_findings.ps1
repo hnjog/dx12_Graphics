@@ -584,7 +584,9 @@ function Write-OrchestrationMarkdown {
         $lines.Add("> $($Context.diff_note)")
     }
 
-    Set-Content -Path $Path -Value ($lines -join "`n") -Encoding utf8
+    $markdownText = $lines -join "`n"
+    $maskedMarkdown = Protect-SensitiveText -Text $markdownText
+    Set-Content -Path $Path -Value ([string]$maskedMarkdown.text) -Encoding utf8
 }
 
 try {

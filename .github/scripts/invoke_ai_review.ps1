@@ -521,7 +521,9 @@ function Write-ReviewMarkdown {
         $lines.Add("> $DiffNote")
     }
 
-    Set-Content -Path $Path -Value ($lines -join "`n") -Encoding utf8
+    $markdownText = $lines -join "`n"
+    $maskedMarkdown = Protect-SensitiveText -Text $markdownText
+    Set-Content -Path $Path -Value ([string]$maskedMarkdown.text) -Encoding utf8
 }
 
 $tempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { (Get-Location).Path }

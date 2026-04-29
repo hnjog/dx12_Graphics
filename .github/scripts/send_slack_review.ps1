@@ -1,3 +1,6 @@
+$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+. "$scriptRoot\ai_orchestration_common.ps1"
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -95,8 +98,9 @@ PR: $prTitleForSlack
 $summaryText
 "@
 
+    $maskedMessage = Protect-SensitiveText -Text ($message.Trim())
     $payload = @{
-        text = $message.Trim()
+        text = [string]$maskedMessage.text
     }
 
     Invoke-RestMethod `
