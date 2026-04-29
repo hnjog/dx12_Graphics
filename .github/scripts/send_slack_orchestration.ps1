@@ -1,3 +1,6 @@
+$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+. "$scriptRoot\ai_orchestration_common.ps1"
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -22,6 +25,9 @@ if ([string]::IsNullOrWhiteSpace($env:SLACK_WEBHOOK_URL)) {
 $blockerCount = Get-IntFromEnv -Value $env:ORCH_BLOCKER_COUNT
 $majorCount = Get-IntFromEnv -Value $env:ORCH_MAJOR_COUNT
 $minorCount = Get-IntFromEnv -Value $env:ORCH_MINOR_COUNT
+$suggestionCount = Get-IntFromEnv -Value $env:ORCH_SUGGESTION_COUNT
+$sensitiveContentMasked = ($env:ORCH_SENSITIVE_CONTENT_MASKED -eq 'true')
+$maskedContentTypes = [string]$env:ORCH_MASKED_CONTENT_TYPES
 $shouldNotifySlack = $false
 
 if ($env:ORCH_REVIEW_STATUS -eq 'failed') {
@@ -57,9 +63,16 @@ try {
     $prUrl = if ($null -ne $pr) { [string]$pr.html_url } else { "https://github.com/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)" }
     $baseRef = if ($null -ne $pr) { [string]$pr.base.ref } else { [string]$env:AI_REVIEW_BASE_REF }
     $headRef = if ($null -ne $pr) { [string]$pr.head.ref } else { [string]$env:GITHUB_REF_NAME }
+    $prTitleForSlack = if ($sensitiveContentMasked) { '민감정보 보호로 제목 생략' } else { $prTitle }
 
     $summaryText = ''
-    if ($env:ORCH_COMMENT_PATH -and (Test-Path -LiteralPath $env:ORCH_COMMENT_PATH)) {
+    if ($sensitiveContentMasked) {
+        $summaryText = '민감정보로 보이는 문자열을 마스킹했기 때문에 이번 실행에서는 상세 요약을 Slack에 포함하지 않았습니다.'
+        if (-not [string]::IsNullOrWhiteSpace($maskedContentTypes)) {
+            $summaryText = "$summaryText`n마스킹 범주: $maskedContentTypes"
+        }
+    }
+    elseif ($env:ORCH_COMMENT_PATH -and (Test-Path -LiteralPath $env:ORCH_COMMENT_PATH)) {
         $summaryText = Get-Content -LiteralPath $env:ORCH_COMMENT_PATH -Raw -Encoding utf8
         $summaryText = $summaryText -replace '\r', ''
         if ($summaryText.Length -gt 1000) {
@@ -67,21 +80,40 @@ try {
         }
     }
 
+    $localizedDecision = switch ([string]$env:ORCH_FINAL_DECISION) {
+        'pass' { '통과' }
+        'needs_human' { '사람 검토 필요' }
+        'failed' { '실패' }
+        default { [string]$env:ORCH_FINAL_DECISION }
+    }
+
+    $localizedVerificationStatus = switch ([string]$env:ORCH_VERIFICATION_STATUS) {
+        'passed' { '통과' }
+        'failed' { '실패' }
+        'skipped' { '건너뜀' }
+        default { [string]$env:ORCH_VERIFICATION_STATUS }
+    }
+
+    $humanGateLabel = if ($env:ORCH_HUMAN_GATE_REQUIRED -eq 'true') { '필요' } else { '불필요' }
+    $sensitiveMaskedLabel = if ($sensitiveContentMasked) { '적용' } else { '미적용' }
+
     $message = @"
-[AI 오케스트레이션] $($env:ORCH_FINAL_DECISION)
-PR: $prTitle
+[AI 오케스트레이션] $localizedDecision
+PR: $prTitleForSlack
 기준 브랜치: $baseRef
 작업 브랜치: $headRef
-검증 상태: $($env:ORCH_VERIFICATION_STATUS)
-Human Gate: $($env:ORCH_HUMAN_GATE_REQUIRED)
-이슈 수: 차단 $blockerCount / 주요 $majorCount / 경미 $minorCount / 제안 $($env:ORCH_SUGGESTION_COUNT)
+검증 상태: $localizedVerificationStatus
+Human Gate: $humanGateLabel
+이슈 수: 차단 $blockerCount / 주요 $majorCount / 경미 $minorCount / 제안 $suggestionCount
+민감정보 마스킹: $sensitiveMaskedLabel
 링크: $prUrl
 
 $summaryText
 "@
 
+    $maskedMessage = Protect-SensitiveText -Text ($message.Trim())
     $payload = @{
-        text = $message.Trim()
+        text = [string]$maskedMessage.text
     }
 
     Invoke-RestMethod `

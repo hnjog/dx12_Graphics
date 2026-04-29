@@ -34,6 +34,10 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      - name: Run sensitive text smoke check
+        shell: pwsh
+        run: ./.github/scripts/test_sensitive_masking.ps1
+
       - name: Collect review context
         id: collect_context
         shell: pwsh
@@ -145,6 +149,8 @@ jobs:
           ORCH_MAJOR_COUNT: ${{ steps.merge_findings.outputs.major_count }}
           ORCH_MINOR_COUNT: ${{ steps.merge_findings.outputs.minor_count }}
           ORCH_SUGGESTION_COUNT: ${{ steps.merge_findings.outputs.suggestion_count }}
+          ORCH_SENSITIVE_CONTENT_MASKED: ${{ steps.collect_context.outputs.sensitive_content_masked }}
+          ORCH_MASKED_CONTENT_TYPES: ${{ steps.collect_context.outputs.masked_content_types }}
           ORCH_COMMENT_PATH: ${{ steps.merge_findings.outputs.comment_path }}
           ORCH_VERIFICATION_STATUS: ${{ steps.verify.outputs.verification_status }}
         run: ./.github/scripts/send_slack_orchestration.ps1

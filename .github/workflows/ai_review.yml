@@ -31,6 +31,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Run sensitive text smoke check
+        shell: pwsh
+        run: ./.github/scripts/test_sensitive_masking.ps1
+
       - name: Run AI review
         id: ai_review
         shell: pwsh
@@ -92,6 +96,8 @@ jobs:
           AI_REVIEW_MAJOR_COUNT: ${{ steps.ai_review.outputs.major_count }}
           AI_REVIEW_MINOR_COUNT: ${{ steps.ai_review.outputs.minor_count }}
           AI_REVIEW_SUGGESTION_COUNT: ${{ steps.ai_review.outputs.suggestion_count }}
+          AI_REVIEW_SENSITIVE_CONTENT_MASKED: ${{ steps.ai_review.outputs.sensitive_content_masked }}
+          AI_REVIEW_MASKED_CONTENT_TYPES: ${{ steps.ai_review.outputs.masked_content_types }}
           AI_REVIEW_COMMENT_PATH: ${{ steps.ai_review.outputs.comment_path }}
           AI_REVIEW_BASE_REF: ${{ github.base_ref }}
         run: ./.github/scripts/send_slack_review.ps1

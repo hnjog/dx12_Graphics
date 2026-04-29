@@ -257,6 +257,229 @@ function Get-BoundedText {
     return $Text.Substring(0, $MaxLength) + "`n`n[Truncated $Label to first $MaxLength characters.]"
 }
 
+function Test-IsBenignReferenceValue {
+    param(
+        [AllowEmptyString()]
+        [string]$Value
+    )
+
+    $candidate = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($candidate)) {
+        return $true
+    }
+
+    $trimmed = $candidate.Trim()
+    if ($trimmed -match '^(?i:true|false|null|none)$') {
+        return $true
+    }
+
+    if ($trimmed -match '^\d+$') {
+        return $true
+    }
+
+    if ($trimmed -match '^(?:\$|%|\$\{\{)') {
+        return $true
+    }
+
+    if ($trimmed -match '^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$') {
+        return $true
+    }
+
+    if ($trimmed -match '^[A-Za-z_][A-Za-z0-9_]*\([^)]*\)$') {
+        return $true
+    }
+
+    return $false
+}
+
+function Protect-InlineCredentialAssignments {
+    param(
+        [AllowEmptyString()]
+        [string]$Text
+    )
+
+    $value = [string]$Text
+    if ([string]::IsNullOrEmpty($value)) {
+        return [pscustomobject]@{
+            text        = $value
+            match_count = 0
+            labels      = @()
+        }
+    }
+
+    $pattern = '(?im)\b(password|passwd|pwd|token|secret|api[_-]?key|access[_-]?key|secret_access_key|aws_secret_access_key)\b(\s*[:=]\s*)([^\r\n#;]+)'
+    $regex = [regex]::new($pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Multiline)
+
+    $maskedValue = $regex.Replace($value, {
+        param($match)
+
+        $name = [string]$match.Groups[1].Value
+        $separator = [string]$match.Groups[2].Value
+        $rawValue = [string]$match.Groups[3].Value
+        $trimmedValue = $rawValue.Trim()
+        $unwrappedValue = $trimmedValue
+        $quotePrefix = ''
+        $quoteSuffix = ''
+
+        if ($trimmedValue.Length -ge 2) {
+            if (($trimmedValue[0] -eq '"' -and $trimmedValue[$trimmedValue.Length - 1] -eq '"') -or ($trimmedValue[0] -eq "'" -and $trimmedValue[$trimmedValue.Length - 1] -eq "'")) {
+                $quotePrefix = [string]$trimmedValue[0]
+                $quoteSuffix = [string]$trimmedValue[$trimmedValue.Length - 1]
+                $unwrappedValue = $trimmedValue.Substring(1, $trimmedValue.Length - 2)
+            }
+        }
+
+        if (Test-IsBenignReferenceValue -Value $unwrappedValue) {
+            return $match.Value
+        }
+
+        $replacementLabel = 'inline_credential'
+        $replacementValue = '[REDACTED_CREDENTIAL]'
+        $looksSensitive = $false
+
+        if ($unwrappedValue -match '^https://hooks\.slack(?:-gov)?\.com/services/[A-Za-z0-9/_-]+$') {
+            $replacementLabel = 'slack_webhook'
+            $replacementValue = '[REDACTED_SLACK_WEBHOOK]'
+            $looksSensitive = $true
+        }
+        elseif ($unwrappedValue -match '^sk-[A-Za-z0-9][A-Za-z0-9_-]{12,}$') {
+            $replacementLabel = 'openai_key'
+            $replacementValue = '[REDACTED_OPENAI_KEY]'
+            $looksSensitive = $true
+        }
+        elseif ($unwrappedValue -match '^(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}$|^github_pat_[A-Za-z0-9_]{20,}$') {
+            $replacementLabel = 'github_token'
+            $replacementValue = '[REDACTED_GITHUB_TOKEN]'
+            $looksSensitive = $true
+        }
+        elseif ($unwrappedValue -match '^xox[baprs]-[A-Za-z0-9-]{10,}$') {
+            $replacementLabel = 'slack_token'
+            $replacementValue = '[REDACTED_SLACK_TOKEN]'
+            $looksSensitive = $true
+        }
+        elseif ($unwrappedValue -match '^AKIA[0-9A-Z]{16}$') {
+            $replacementLabel = 'aws_access_key'
+            $replacementValue = '[REDACTED_AWS_ACCESS_KEY]'
+            $looksSensitive = $true
+        }
+        elseif ($unwrappedValue -match '^[A-Za-z0-9/+=]{40}$' -and $name -match '^(?i:aws_secret_access_key|secret_access_key|access_key|api_key|token|secret)$') {
+            $replacementLabel = 'aws_secret_access_key'
+            $replacementValue = '[REDACTED_AWS_SECRET_KEY]'
+            $looksSensitive = $true
+        }
+        elseif ($unwrappedValue -match '^Bearer\s+[A-Za-z0-9._~+/\-=]{10,}$') {
+            $replacementLabel = 'bearer_token'
+            $replacementValue = 'Bearer [REDACTED_BEARER_TOKEN]'
+            $looksSensitive = $true
+        }
+        elseif ($name -match '^(?i:password|passwd|pwd|secret|secret_access_key|aws_secret_access_key)$') {
+            $looksSensitive = $true
+        }
+        elseif ($name -match '^(?i:token|api[_-]?key|access[_-]?key)$' -and $unwrappedValue.Length -ge 6) {
+            $looksSensitive = $true
+        }
+        elseif ($unwrappedValue.Length -ge 12 -and $unwrappedValue -match '^[A-Za-z0-9_/\-+=]+$' -and $unwrappedValue -match '[0-9/\-+=]') {
+            $looksSensitive = $true
+        }
+
+        if (-not $looksSensitive) {
+            return $match.Value
+        }
+
+        if ($replacementValue -like 'Bearer *') {
+            return "$name$separator$replacementValue"
+        }
+
+        if ($quotePrefix) {
+            return "$name$separator$quotePrefix$replacementValue$quoteSuffix"
+        }
+
+        return "$name$separator$replacementValue"
+    })
+
+    $placeholderMap = @{
+        '[REDACTED_SLACK_WEBHOOK]' = 'slack_webhook'
+        '[REDACTED_OPENAI_KEY]' = 'openai_key'
+        '[REDACTED_GITHUB_TOKEN]' = 'github_token'
+        '[REDACTED_SLACK_TOKEN]' = 'slack_token'
+        '[REDACTED_AWS_ACCESS_KEY]' = 'aws_access_key'
+        '[REDACTED_AWS_SECRET_KEY]' = 'aws_secret_access_key'
+        'Bearer [REDACTED_BEARER_TOKEN]' = 'bearer_token'
+        '[REDACTED_CREDENTIAL]' = 'inline_credential'
+    }
+
+    $labels = New-Object System.Collections.Generic.List[string]
+    $matchCount = 0
+    foreach ($placeholder in $placeholderMap.Keys) {
+        $placeholderCount = ([regex]::Matches($maskedValue, [regex]::Escape($placeholder))).Count
+        if ($placeholderCount -gt 0) {
+            $matchCount += $placeholderCount
+            $labels.Add([string]$placeholderMap[$placeholder]) | Out-Null
+        }
+    }
+
+    return [pscustomobject]@{
+        text        = $maskedValue
+        match_count = $matchCount
+        labels      = @($labels | Select-Object -Unique)
+    }
+}
+
+function Protect-SensitiveText {
+    param(
+        [AllowEmptyString()]
+        [string]$Text
+    )
+
+    $value = [string]$Text
+    if ([string]::IsNullOrEmpty($value)) {
+        return [pscustomobject]@{
+            text                  = $value
+            has_sensitive_content = $false
+            match_count           = 0
+            labels                = @()
+        }
+    }
+
+    $labels = New-Object System.Collections.Generic.List[string]
+    $matchCount = 0
+    $rules = @(
+        @{ Pattern = 'https://hooks\.slack(?:-gov)?\.com/services/[A-Za-z0-9/_-]+'; Replacement = '[REDACTED_SLACK_WEBHOOK]'; Label = 'slack_webhook'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
+        @{ Pattern = '\bsk-[A-Za-z0-9][A-Za-z0-9_-]{12,}\b'; Replacement = '[REDACTED_OPENAI_KEY]'; Label = 'openai_key'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
+        @{ Pattern = '\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b'; Replacement = '[REDACTED_GITHUB_TOKEN]'; Label = 'github_token'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
+        @{ Pattern = '\bxox[baprs]-[A-Za-z0-9-]{10,}\b'; Replacement = '[REDACTED_SLACK_TOKEN]'; Label = 'slack_token'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
+        @{ Pattern = '\bAKIA[0-9A-Z]{16}\b'; Replacement = '[REDACTED_AWS_ACCESS_KEY]'; Label = 'aws_access_key'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
+        @{ Pattern = '\bBearer\s+[A-Za-z0-9._~+/\-=]{10,}\b'; Replacement = 'Bearer [REDACTED_BEARER_TOKEN]'; Label = 'bearer_token'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase },
+        @{ Pattern = '(?s)-----BEGIN(?: [A-Z]+)* PRIVATE KEY-----.+?-----END(?: [A-Z]+)* PRIVATE KEY-----'; Replacement = '[REDACTED_PRIVATE_KEY]'; Label = 'private_key'; Options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase }
+    )
+
+    foreach ($rule in $rules) {
+        $regex = [regex]::new([string]$rule.Pattern, [System.Text.RegularExpressions.RegexOptions]$rule.Options)
+        $matches = $regex.Matches($value)
+        if ($matches.Count -gt 0) {
+            $matchCount += $matches.Count
+            $labels.Add([string]$rule.Label) | Out-Null
+            $value = $regex.Replace($value, [string]$rule.Replacement)
+        }
+    }
+
+    $inlineCredentialResult = Protect-InlineCredentialAssignments -Text $value
+    $value = [string]$inlineCredentialResult.text
+    if ($inlineCredentialResult.match_count -gt 0) {
+        $matchCount += [int]$inlineCredentialResult.match_count
+        foreach ($label in @($inlineCredentialResult.labels)) {
+            $labels.Add([string]$label) | Out-Null
+        }
+    }
+
+    return [pscustomobject]@{
+        text                  = $value
+        has_sensitive_content = ($labels.Count -gt 0)
+        match_count           = $matchCount
+        labels                = @($labels | Select-Object -Unique)
+    }
+}
+
 function Get-ReviewFilePlan {
     param(
         [Parameter(Mandatory = $true)]

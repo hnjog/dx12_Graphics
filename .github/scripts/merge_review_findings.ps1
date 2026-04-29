@@ -1,4 +1,4 @@
-. "$PSScriptRoot\ai_orchestration_common.ps1"
+﻿. "$PSScriptRoot\ai_orchestration_common.ps1"
 
 $tempRoot = Get-TempRoot
 $commentPath = Join-Path $tempRoot 'ai-orchestrator-comment.md'
@@ -47,6 +47,110 @@ function New-MergedReviewResult {
         review_status             = $ReviewStatus
         moderator_mode            = $ModeratorMode
         moderator_fallback_reason = $ModeratorFallbackReason
+    }
+}
+
+function Get-LocalizedRiskLevel {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RiskLevel
+    )
+
+    switch ($RiskLevel) {
+        'low' { return '낮음' }
+        'medium' { return '보통' }
+        'high' { return '높음' }
+        'unknown' { return '알 수 없음' }
+        default { return $RiskLevel }
+    }
+}
+
+function Get-LocalizedDecision {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Decision
+    )
+
+    switch ($Decision) {
+        'pass' { return '통과' }
+        'needs_human' { return '사람 검토 필요' }
+        'failed' { return '실패' }
+        default { return $Decision }
+    }
+}
+
+function Get-LocalizedVerificationStatus {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Status
+    )
+
+    switch ($Status) {
+        'passed' { return '통과' }
+        'failed' { return '실패' }
+        'skipped' { return '건너뜀' }
+        default { return $Status }
+    }
+}
+
+function Get-LocalizedSeverity {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Severity
+    )
+
+    switch ($Severity) {
+        'Blocker' { return '차단' }
+        'Major' { return '주요' }
+        'Minor' { return '경미' }
+        'Suggestion' { return '제안' }
+        default { return $Severity }
+    }
+}
+
+function Get-LocalizedHumanGateReason {
+    param(
+        [AllowEmptyString()]
+        [string]$Reason
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Reason)) {
+        return $Reason
+    }
+
+    $parts = @(
+        ($Reason -split ';') |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+
+    $localized = foreach ($part in $parts) {
+        switch ($part) {
+            'verification_failed' { 'verification 실행이 실패했습니다' }
+            'verification_skipped_unsafely' { 'verification이 안전하지 않은 이유로 건너뛰어졌습니다' }
+            'specialist_review_failed' { 'specialist review 실행이 실패했습니다' }
+            'specialist_reviews_unavailable' { '사용 가능한 specialist review 결과가 없습니다' }
+            'verification_or_review_failed' { 'verification 또는 review 실행이 실패했습니다' }
+            'major_findings_present' { '주요 이슈가 남아 있습니다' }
+            'merge_failed' { 'merge 단계가 실패했습니다' }
+            'none' { '없음' }
+            default { $part }
+        }
+    }
+
+    return ($localized -join '; ')
+}
+
+function Get-ReviewerDisplayName {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Reviewer
+    )
+
+    switch ($Reviewer) {
+        'dx12_lifetime_sync' { return 'dx12_lifetime_sync' }
+        'regression_testing' { return 'regression_testing' }
+        default { return $Reviewer }
     }
 }
 
@@ -314,27 +418,27 @@ function Get-DeterministicMergedResult {
 
     $summary = ''
     if ($uniqueFindings.Count -eq 0) {
-        $summary = 'No material findings were reported after combining specialist reviews and verification.'
+        $summary = 'specialist review와 verification 결과를 종합한 뒤 보고할 만한 주요 이슈를 찾지 못했습니다.'
     }
     else {
-        $summary = "The moderator collected $($uniqueFindings.Count) material findings from specialist reviews."
+        $summary = "moderator가 specialist review 결과를 종합해 주요 이슈 $($uniqueFindings.Count)건을 정리했습니다."
     }
 
     $overallAssessment = ''
     switch ($finalDecision) {
         'failed' {
             if ($verificationSafety.unsafe_skip) {
-                $overallAssessment = 'Verification was skipped for an unsafe reason, so a person should review the result.'
+                $overallAssessment = 'verification이 안전하지 않은 이유로 건너뛰어져 자동 판단을 신뢰하기 어렵습니다. 사람이 결과를 검토해야 합니다.'
             }
             else {
-                $overallAssessment = 'The orchestration or verification stage failed, so a person should review the result.'
+                $overallAssessment = '오케스트레이션 또는 verification 단계가 실패해 자동 판단을 신뢰하기 어렵습니다. 사람이 결과를 검토해야 합니다.'
             }
         }
         'needs_human' {
-            $overallAssessment = 'A person should make the final decision because major findings remain.'
+            $overallAssessment = '남아 있는 주요 이슈 또는 운영상 불확실성 때문에 사람이 최종 판단을 내려야 합니다.'
         }
         default {
-            $overallAssessment = 'The current automated review and verification gate passed without major issues.'
+            $overallAssessment = '현재 자동 리뷰와 verification gate 기준에서는 머지를 막을 만한 주요 문제를 확인하지 못했습니다.'
         }
     }
 
@@ -372,77 +476,90 @@ function Write-OrchestrationMarkdown {
     $majorCount = @($findings | Where-Object { $_.severity -eq 'Major' }).Count
     $minorCount = @($findings | Where-Object { $_.severity -eq 'Minor' }).Count
     $suggestionCount = @($findings | Where-Object { $_.severity -eq 'Suggestion' }).Count
-    $humanGateLabel = "Not required"
+    $humanGateLabel = '불필요'
     if ($MergedReview.human_gate_required) {
-        $humanGateLabel = "Required"
+        $humanGateLabel = '필요'
     }
 
+    $localizedDecision = Get-LocalizedDecision -Decision ([string]$MergedReview.final_decision)
+    $localizedRiskLevel = Get-LocalizedRiskLevel -RiskLevel ([string]$MergedReview.risk_level)
+    $localizedVerificationStatus = Get-LocalizedVerificationStatus -Status ([string]$Verification.verification_status)
+    $localizedHumanGateReason = Get-LocalizedHumanGateReason -Reason ([string]$MergedReview.human_gate_reason)
+    $specialistStats = Get-SpecialistExecutionStats -SpecialistResults $SpecialistResults
+
     $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add("## AI Orchestration MVP")
-    $lines.Add("")
-    $lines.Add("- Base branch: $($Context.base_ref)")
-    $lines.Add("- Head branch: $($Context.head_ref)")
-    $lines.Add("- Final decision: $($MergedReview.final_decision)")
-    $lines.Add("- Risk level: $($MergedReview.risk_level)")
+    $lines.Add('## AI Orchestration MVP')
+    $lines.Add('')
+    $lines.Add("- 기준 브랜치: $($Context.base_ref)")
+    $lines.Add("- 작업 브랜치: $($Context.head_ref)")
+    $lines.Add("- 최종 판단: $localizedDecision ($($MergedReview.final_decision))")
+    $lines.Add("- 위험도: $localizedRiskLevel")
     $lines.Add("- Human Gate: $humanGateLabel")
-    if (-not [string]::IsNullOrWhiteSpace([string]$MergedReview.human_gate_reason)) {
-        $lines.Add("- Human Gate reason: $($MergedReview.human_gate_reason)")
+    if (-not [string]::IsNullOrWhiteSpace($localizedHumanGateReason)) {
+        $lines.Add("- Human Gate 사유: $localizedHumanGateReason")
     }
-    $lines.Add("- Verification status: $($Verification.verification_status)")
+    $lines.Add("- Verification 상태: $localizedVerificationStatus")
     if (-not [string]::IsNullOrWhiteSpace([string]$Verification.verification_reason)) {
-        $lines.Add("- Verification reason: $($Verification.verification_reason)")
+        $lines.Add("- Verification 사유: $($Verification.verification_reason)")
     }
     if (-not [string]::IsNullOrWhiteSpace([string]$MergedReview.moderator_mode)) {
         $lines.Add("- Moderator mode: $($MergedReview.moderator_mode)")
     }
     if (-not [string]::IsNullOrWhiteSpace([string]$MergedReview.moderator_fallback_reason)) {
-        $lines.Add("- Moderator fallback reason: $($MergedReview.moderator_fallback_reason)")
+        $lines.Add("- Moderator fallback 사유: $($MergedReview.moderator_fallback_reason)")
     }
     if ($null -ne $Context.PSObject.Properties['orchestration_plan']) {
         $plan = $Context.orchestration_plan
-        $lines.Add("- Orchestration mode: $($plan.mode)")
-        $lines.Add("- Specialist plan: dx12 $($plan.run_dx12_specialist) / regression $($plan.run_regression_specialist)")
-        $lines.Add("- Moderator policy: $($plan.moderator_policy)")
+        $lines.Add("- 오케스트레이션 모드: $($plan.mode)")
+        $lines.Add("- Specialist 계획: dx12 $($plan.run_dx12_specialist) / regression $($plan.run_regression_specialist)")
+        $lines.Add("- Moderator 정책: $($plan.moderator_policy)")
     }
-    $specialistStats = Get-SpecialistExecutionStats -SpecialistResults $SpecialistResults
-    $lines.Add("- Specialist execution: completed $($specialistStats.completed) / skipped $($specialistStats.skipped) / failed $($specialistStats.failed)")
-    $lines.Add("- Finding counts: blocker $blockerCount / major $majorCount / minor $minorCount / suggestion $suggestionCount")
-    $lines.Add("")
-    $lines.Add("### Summary")
+    if ($null -ne $Context.PSObject.Properties['sensitive_content_masked'] -and [bool]$Context.sensitive_content_masked) {
+        $maskedTypesLabel = ''
+        if ($null -ne $Context.PSObject.Properties['masked_content_types'] -and @($Context.masked_content_types).Count -gt 0) {
+            $maskedTypesLabel = " ($(@($Context.masked_content_types) -join ', '))"
+        }
+        $lines.Add("- 민감정보 마스킹: 적용됨$maskedTypesLabel")
+    }
+    $lines.Add("- Specialist 실행: completed $($specialistStats.completed) / skipped $($specialistStats.skipped) / failed $($specialistStats.failed)")
+    $lines.Add("- 이슈 수: 차단 $blockerCount / 주요 $majorCount / 경미 $minorCount / 제안 $suggestionCount")
+    $lines.Add('')
+    $lines.Add('### 요약')
     $lines.Add([string]$MergedReview.summary)
-    $lines.Add("")
-    $lines.Add("### Overall Assessment")
+    $lines.Add('')
+    $lines.Add('### 종합 판단')
     $lines.Add([string]$MergedReview.overall_assessment)
-    $lines.Add("")
-    $lines.Add("### Specialist Review Summary")
-    $lines.Add("- Execution: completed $($specialistStats.completed) / skipped $($specialistStats.skipped) / failed $($specialistStats.failed)")
+    $lines.Add('')
+    $lines.Add('### Specialist 리뷰 요약')
+    $lines.Add("- 실행 요약: completed $($specialistStats.completed) / skipped $($specialistStats.skipped) / failed $($specialistStats.failed)")
     foreach ($specialist in $SpecialistResults) {
-        $lines.Add("- $([string]$specialist.reviewer): $([string]$specialist.summary)")
+        $lines.Add("- $(Get-ReviewerDisplayName -Reviewer ([string]$specialist.reviewer)): $([string]$specialist.summary)")
     }
-    $lines.Add("")
-    $lines.Add("### Verification Result")
-    $lines.Add("- Status: $($Verification.verification_status)")
-    $lines.Add("- Summary: $($Verification.summary)")
+    $lines.Add('')
+    $lines.Add('### Verification 결과')
+    $lines.Add("- 상태: $localizedVerificationStatus")
+    $lines.Add("- 요약: $($Verification.summary)")
     if (-not [string]::IsNullOrWhiteSpace([string]$Verification.verification_reason)) {
-        $lines.Add("- Reason: $($Verification.verification_reason)")
+        $lines.Add("- 사유: $($Verification.verification_reason)")
     }
     foreach ($check in @($Verification.checks)) {
-        $lines.Add("- $($check.name): $($check.status) - $($check.note)")
+        $checkStatus = Get-LocalizedVerificationStatus -Status ([string]$check.status)
+        $lines.Add("- $($check.name): $checkStatus - $($check.note)")
         if ($null -ne $check.PSObject.Properties['exit_code']) {
             $lines.Add("  - Exit code: $($check.exit_code)")
         }
         if ($null -ne $check.PSObject.Properties['log_excerpt'] -and -not [string]::IsNullOrWhiteSpace([string]$check.log_excerpt)) {
-            $lines.Add("  - Log excerpt:")
+            $lines.Add('  - 로그 발췌:')
             foreach ($line in @(([string]$check.log_excerpt) -split "\r?\n")) {
                 $lines.Add("    $line")
             }
         }
     }
-    $lines.Add("")
-    $lines.Add("### Findings")
+    $lines.Add('')
+    $lines.Add('### 세부 이슈')
 
     if ($findings.Count -eq 0) {
-        $lines.Add("- No material findings were reported.")
+        $lines.Add('- 보고된 주요 이슈가 없습니다.')
     }
     else {
         $index = 1
@@ -452,21 +569,24 @@ function Write-OrchestrationMarkdown {
                 $location = "{0}:{1}" -f $location, $finding.line_start
             }
 
-            $lines.Add("$index. [$([string]$finding.severity)] $($finding.title)")
-            $lines.Add("   - Location: $location")
-            $lines.Add("   - Risk: $($finding.risk)")
-            $lines.Add("   - Recommendation: $($finding.recommendation)")
-            $lines.Add("   - Confidence: $($finding.confidence)")
+            $localizedSeverity = Get-LocalizedSeverity -Severity ([string]$finding.severity)
+            $lines.Add("$index. [$localizedSeverity] $($finding.title)")
+            $lines.Add("   - 위치: $location")
+            $lines.Add("   - 위험: $($finding.risk)")
+            $lines.Add("   - 권장 대응: $($finding.recommendation)")
+            $lines.Add("   - 신뢰도: $($finding.confidence)")
             $index++
         }
     }
 
     if (-not [string]::IsNullOrWhiteSpace([string]$Context.diff_note)) {
-        $lines.Add("")
+        $lines.Add('')
         $lines.Add("> $($Context.diff_note)")
     }
 
-    Set-Content -Path $Path -Value ($lines -join "`n") -Encoding utf8
+    $markdownText = $lines -join "`n"
+    $maskedMarkdown = Protect-SensitiveText -Text $markdownText
+    Set-Content -Path $Path -Value ([string]$maskedMarkdown.text) -Encoding utf8
 }
 
 try {
@@ -480,7 +600,7 @@ try {
     }
 
     if ($specialistResults.Count -eq 0) {
-        throw 'No specialist review result files were found for merge.'
+        throw 'merge 단계에서 사용할 specialist review 결과 파일을 찾지 못했습니다.'
     }
 
     if (-not [string]::IsNullOrWhiteSpace([string]$env:VERIFICATION_RESULT_PATH) -and (Test-Path -LiteralPath $env:VERIFICATION_RESULT_PATH)) {
@@ -489,7 +609,7 @@ try {
     else {
         $verification = [pscustomobject]@{
             verification_status = 'failed'
-            summary             = 'Verification result file was missing, so the verification state could not be trusted.'
+            summary             = 'verification 결과 파일이 없어 현재 검증 상태를 신뢰할 수 없습니다.'
             verification_reason = 'missing_result'
             skip_is_safe        = $false
             checks              = @()
@@ -515,6 +635,7 @@ try {
                 'If verification is skipped for any other reason, do not return pass.'
                 'If every specialist review is skipped, do not return pass.'
                 'If any specialist review failed, require a human gate.'
+                'Write all user-facing prose in Korean.'
                 'Write concise user-facing prose.'
                 'Keep enum values exactly as specified in the schema.'
                 'Return at most 8 findings.'
@@ -601,7 +722,7 @@ try {
         }
         catch {
             $fallbackReason = Get-OpenAIErrorDetail -Exception $_.Exception
-            Write-Warning "OpenAI moderator failed; using deterministic fallback. Detail: $fallbackReason"
+            Write-Warning "OpenAI moderator 실행이 실패하여 deterministic fallback으로 대체합니다. 상세: $fallbackReason"
             $mergedReview = Get-DeterministicMergedResult `
                 -Verification $verification `
                 -SpecialistResults $specialistResults `
@@ -614,14 +735,14 @@ try {
             -Verification $verification `
             -SpecialistResults $specialistResults `
             -ModeratorMode 'deterministic_conditional_skip' `
-            -ModeratorFallbackReason 'OpenAI moderator skipped by conditional orchestration policy'
+            -ModeratorFallbackReason '조건부 오케스트레이션 정책에 따라 OpenAI moderator를 건너뛰었습니다.'
     }
     else {
         $mergedReview = Get-DeterministicMergedResult `
             -Verification $verification `
             -SpecialistResults $specialistResults `
             -ModeratorMode 'deterministic_no_api_key' `
-            -ModeratorFallbackReason 'OPENAI_API_KEY not configured'
+            -ModeratorFallbackReason 'OPENAI_API_KEY가 설정되지 않았습니다.'
     }
 
     $mergedReview = Apply-FinalDecisionGuard -MergedReview $mergedReview -Verification $verification -SpecialistResults $specialistResults -Context $context
@@ -665,14 +786,14 @@ catch {
 
     $verification = [pscustomobject]@{
         verification_status = 'failed'
-        summary             = 'The merge stage failed, so the verification state should not be trusted.'
+        summary             = 'merge 단계가 실패했으므로 verification 상태를 신뢰할 수 없습니다.'
         verification_reason = 'merge_failed'
         skip_is_safe        = $false
         checks              = @()
     }
 
     $mergedReview = New-MergedReviewResult `
-        -Summary 'The orchestration merge stage failed.' `
+        -Summary '오케스트레이션 merge 단계가 실패했습니다.' `
         -OverallAssessment ([string]$_.Exception.Message) `
         -RiskLevel 'unknown' `
         -Findings @() `
