@@ -61,6 +61,13 @@ $cases = @(
         expectedSensitive = $true
     },
     @{
+        name = 'identifier_like_secret'
+        text = 'password = Token123'
+        expectedLabel = 'inline_credential'
+        expectedText = '[REDACTED_CREDENTIAL]'
+        expectedSensitive = $true
+    },
+    @{
         name = 'aws_secret_access_key'
         text = 'aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
         expectedLabel = 'aws_secret_access_key'

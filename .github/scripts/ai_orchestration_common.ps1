@@ -281,10 +281,6 @@ function Test-IsBenignReferenceValue {
         return $true
     }
 
-    if ($trimmed -match '^[A-Za-z_][A-Za-z0-9_]*$') {
-        return $true
-    }
-
     if ($trimmed -match '^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$') {
         return $true
     }
@@ -374,6 +370,12 @@ function Protect-InlineCredentialAssignments {
         elseif ($unwrappedValue -match '^Bearer\s+[A-Za-z0-9._~+/\-=]{10,}$') {
             $replacementLabel = 'bearer_token'
             $replacementValue = 'Bearer [REDACTED_BEARER_TOKEN]'
+            $looksSensitive = $true
+        }
+        elseif ($name -match '^(?i:password|passwd|pwd|secret|secret_access_key|aws_secret_access_key)$') {
+            $looksSensitive = $true
+        }
+        elseif ($name -match '^(?i:token|api[_-]?key|access[_-]?key)$' -and $unwrappedValue.Length -ge 6) {
             $looksSensitive = $true
         }
         elseif ($unwrappedValue.Length -ge 12 -and $unwrappedValue -match '^[A-Za-z0-9_/\-+=]+$' -and $unwrappedValue -match '[0-9/\-+=]') {

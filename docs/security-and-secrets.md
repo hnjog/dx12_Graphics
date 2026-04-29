@@ -74,6 +74,7 @@ Current first-pass masking includes:
   - `token: ...`
   - `secret = ...`
   - `api_key = ...`
+  - identifier-like values such as `password = Token123` are also treated as sensitive unless they are clearly code references like `request.Token`
 
 ### 4. Slack Summary-Only Pattern
 
@@ -125,6 +126,8 @@ Use the following representative input strings when validating masking behavior 
    - Example: `-----BEGIN PRIVATE KEY----- ... -----END PRIVATE KEY-----`
 4. Inline credential
    - Example: `password = super-secret-value`
+5. Identifier-like secret value
+   - Example: `password = Token123`
 
 Expected results:
 
